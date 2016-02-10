@@ -1,7 +1,8 @@
 ---
 layout: post
 ---
-<img src="http://imgur.com/67jXDCW" class="fit image">
+<a href="http://imgur.com/67jXDCW"><img src="http://i.imgur.com/67jXDCW.jpg" title="source: imgur.com" /></a>
+
 <h3>Coding Best Practices</h3>
 <p>-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.</p>
 <p>-Before you even touch your keyboard, Psorta-code (thinking in head when working by yourself or talking to your pair about what you think will work) then Pseudocode (Write down how your code is going to be implemented in pure words, meaning not actually coding language)</p>

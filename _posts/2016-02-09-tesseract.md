@@ -47,5 +47,5 @@ If the photo is fully colored, you need to filter the photo to be monochrome (bl
 
 Here is the result that I got
 
-<img src="http://imgur.com/pNOqQGk"/>
-<img src="http://imgur.com/7wzyvBA"/>
+<a href="http://imgur.com/pNOqQGk"><img src="http://i.imgur.com/pNOqQGk.jpg" title="source: imgur.com" /></a>
+<a href="http://imgur.com/7wzyvBA"><img src="http://i.imgur.com/7wzyvBA.png" title="source: imgur.com" /></a>
