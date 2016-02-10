@@ -48,7 +48,7 @@
   </header>
 
   <div class="post-content" itemprop="articleBody">
-    <p><img src="../images/bcrypt.jpg" class="fit image" /></p>
+    <p><img src="./images/bcrypt.jpg" class="fit image" /></p>
 
 <h4 id="this-guide-is-to-assist-struggling-programmers-step-through-their-own-implementation-of-bcrypt-with-nodejs">This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js</h4>
 <p>Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.</p>
@@ -86,7 +86,7 @@ First, you install the module using</p>
 bcrypt.genSalt(10, function(err, salt) {
     bcrypt.hash('B4c0/\/', salt, function(err, hash) {
         // Store hash in your password DB.
-    });	
+    });
 });
 </code></pre>
 </div>
@@ -129,7 +129,7 @@ bcrypt.genSalt(10, function(err, salt) {
     User.find({ username: obj.username }).then(function(user, err) { //query method for Mongoose
         if (err) {
             console.log('unable to find user!!', err);
-        } else {	
+        } else {
             Bcrypt.compare(obj.password, user[0].password, function(err, result) {
                 if (err) {
                     defer.reject(err);
@@ -159,7 +159,6 @@ bcrypt.genSalt(10, function(err, salt) {
 });
 </code></pre>
 </div>
-
 
   </div>
 
