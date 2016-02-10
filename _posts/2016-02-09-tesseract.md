@@ -47,5 +47,5 @@ If the photo is fully colored, you need to filter the photo to be monochrome (bl
 
 Here is the result that I got
 
-<img src="./images/tesseract.jpg"/>
-<img src="./images/tesseract2.png"/>
+<img src="./tesseract.jpg"/>
+<img src="./tesseract2.png"/>
