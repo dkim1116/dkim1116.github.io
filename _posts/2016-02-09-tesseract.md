@@ -2,6 +2,7 @@
 layout: post
 ---
 
+
 ####Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.
 
 ###Basic setup

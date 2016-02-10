@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Millikyl</title>
+    <description>Write an awesome description for your new site here. You can edit this line in _config.yml. It will appear in your document head meta (for Google search results) and in your feed.xml site description.
+</description>
+    <link>/</link>
+    <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Tue, 09 Feb 2016 19:09:03 -0800</pubDate>
+    <lastBuildDate>Tue, 09 Feb 2016 19:09:03 -0800</lastBuildDate>
+    <generator>Jekyll v3.1.1</generator>
+    
+      <item>
+        <title>Tesseract</title>
+        <description>&lt;h4 id=&quot;tesseract-is-an-ocr-optical-character-recognition-engine-that-was-originally-developed-at-hewlett-packard-laboratories-but-has-been-sponsered-and-improved-by-google-since-2006&quot;&gt;Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.&lt;/h4&gt;
+
+&lt;h3 id=&quot;basic-setup&quot;&gt;Basic setup&lt;/h3&gt;
+&lt;p&gt;To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install leptonica&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;After that, install tesseract globally by running &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install tesseract&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;If you don’t have Homebrew installed, you can install Tesseract using MacPorts by running &lt;code class=&quot;highlighter-rouge&quot;&gt;sudo port install tesseract&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;If you need the engine to recognize a different language other than English, you need to specify which language you need by running &lt;code class=&quot;highlighter-rouge&quot;&gt;sudo port install tesseract-&amp;lt;languagecode&amp;gt; || brew install tesseract-&amp;lt;languagecode&amp;gt;&lt;/code&gt;
+Without specifying a language code, by default it will only install the package for English recognition.&lt;/p&gt;
+
+&lt;p&gt;Besides global installation for local server development, to install the OCR engine for node, you need to run &lt;code class=&quot;highlighter-rouge&quot;&gt;npm install node-tesseract&lt;/code&gt; to include as a node-module.&lt;/p&gt;
+
+&lt;h4 id=&quot;now-on-to-the-implementation&quot;&gt;Now, on to the implementation&lt;/h4&gt;
+
+&lt;p&gt;First off, unless you use browserify to require the module on the frontend, all of the magic will happen on the backend.&lt;/p&gt;
+
+&lt;p&gt;You can simply require in a node file by typing,&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var tesseract = require(&#39;node-tesseract&#39;);
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;There are several methods that are attached to the ‘tesseract’ variable at this point, but to tell the engine to process the image, the only method you need to use is the &lt;code class=&quot;highlighter-rouge&quot;&gt;.process(path, callback)&lt;/code&gt;, which takes in the path to the image file and a callback.&lt;/p&gt;
+
+&lt;p&gt;Here is an example from the documentation:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;tesseract.process(__dirname + &#39;/path/to/image.jpg&#39;,function(err, text) {
+  if(err) {
+    console.error(err);
+  } else {
+    console.log(text);
+  }
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;As you can see, the implementation of the engine is quite simple depending on the usage and the need of a precise character recognition.&lt;/p&gt;
+
+&lt;p&gt;This is a small tip that I figured out on my own, but if your implementation of the engine is having trouble recognizing the right text, you have to consider two things. Was the text in the photo handwritten? If not, is the photo fully colored?&lt;/p&gt;
+
+&lt;p&gt;If the text was handwritten, the engine will have trouble processing it because it can only recognize about 40 different fonts.&lt;/p&gt;
+
+&lt;p&gt;If the photo is fully colored, you need to filter the photo to be monochrome (black and white), which then will allow the engine to recognize the text more easily.&lt;/p&gt;
+
+&lt;p&gt;Here is the result that I got&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;../images/tesseract.jpg&quot; /&gt;
+&lt;img src=&quot;../images/tesseract2.png&quot; /&gt;&lt;/p&gt;
+</description>
+        <pubDate>Tue, 09 Feb 2016 00:00:00 -0800</pubDate>
+        <link>/2016/02/09/tesseract.html</link>
+        <guid isPermaLink="true">/2016/02/09/tesseract.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Bcrypt</title>
+        <description>&lt;p&gt;&lt;img src=&quot;../images/bcrypt.jpg&quot; class=&quot;fit image&quot; /&gt;&lt;/p&gt;
+
+&lt;h4 id=&quot;this-guide-is-to-assist-struggling-programmers-step-through-their-own-implementation-of-bcrypt-with-nodejs&quot;&gt;This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js&lt;/h4&gt;
+&lt;p&gt;Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.&lt;/p&gt;
+
+&lt;p&gt;While there are many different ways to salt and hash data, using bcrypt is among the easiest methods.&lt;/p&gt;
+
+&lt;p&gt;Implementing bcrypt for a synchronous usage is almost too easy, but for an asynchronous usage, there can be an issue.&lt;/p&gt;
+
+&lt;h3 id=&quot;asynchronous-implementation&quot;&gt;Asynchronous implementation&lt;/h3&gt;
+
+&lt;p&gt;When utilizing a promise, from the server, following the documentation’s example will not work, due to the fact that it is expecting a promise from the database-side.&lt;/p&gt;
+
+&lt;p&gt;The solution that I was able to conceive was to use ‘q’. Which is one of the many tools that is used to create and compose asynchronous promises.
+Implementing ‘q’ with bcrypt turned out to be quite simple.
+First, you install the module using&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;npm install q&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;Secondly, you declare a salt-factor, which will be used when generating salt. Higher the number, the larger the salt will be.&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var salt_factor = 10;&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;Then you require the module where the insertion/query is made, by doing&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var Q = require(&#39;q&#39;);&lt;/code&gt;&lt;/p&gt;
+
+&lt;h4 id=&quot;creating-a-new-user&quot;&gt;Creating a new user&lt;/h4&gt;
+&lt;p&gt;When you are inserting a user’s credentials, before salting and hashing takes place, you declare a variable that will handle the deferment.&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var defer = Q.defer();&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;After that, you salt and hash the user’s password by following the example from the bcrypt documentation.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var bcrypt = require(&#39;bcrypt&#39;);
+bcrypt.genSalt(10, function(err, salt) {
+    bcrypt.hash(&#39;B4c0/\/&#39;, salt, function(err, hash) {
+        // Store hash in your password DB.
+    });	
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;The issue that I faced while following the example was that I the function itself, could not be used with a &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; or a return statement.&lt;/p&gt;
+
+&lt;h4 id=&quot;heres-my-implementation-of-creating-a-user&quot;&gt;Here’s my implementation of creating a user&lt;/h4&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.createUser = function(obj) {
+    var defer = Q.defer();
+    Bcrypt.genSalt(Salt_Factor, function(err, salt) {
+        if (err) {
+            return console.error(err);
+        }
+        Bcrypt.hash(obj.password, salt, function(err, hash) {
+            if (err) {
+                return console.err(err);
+            }
+            obj.password = hash;
+            var user = new User(obj);   //Model instatiation using Mongoose
+            user.save(function(err, user) {   //Inserting the model
+                if (err) {
+                    defer.reject(err);     
+                } else {
+                    defer.resolve(user);
+                }
+            });
+        });
+    });
+    return defer.promise;
+};
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;h4 id=&quot;checking-a-users-password&quot;&gt;Checking a user’s password&lt;/h4&gt;
+&lt;p&gt;Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the &lt;code class=&quot;highlighter-rouge&quot;&gt;.compare&lt;/code&gt; method instead of the &lt;code class=&quot;highlighter-rouge&quot;&gt;.genSalt&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;.hash&lt;/code&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.findUser = function(obj) {
+    var defer = Q.defer();
+    User.find({ username: obj.username }).then(function(user, err) { //query method for Mongoose
+        if (err) {
+            console.log(&#39;unable to find user!!&#39;, err);
+        } else {	
+            Bcrypt.compare(obj.password, user[0].password, function(err, result) {
+                if (err) {
+                    defer.reject(err);
+                } else {
+                    defer.resolve(result);
+                }
+            });
+        }
+    });
+    return defer.promise;
+};
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; promise can be utilized.&lt;/p&gt;
+
+&lt;h4 id=&quot;example-of-a-request-handler-using-express&quot;&gt;Example of a request handler using express&lt;/h4&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;app.post(&#39;/createUser&#39;, function(req, res, next) {
+    db.createUser(req.body).then(function(user, err) {
+        if (err) {
+            res.status(406);
+        } else {
+            res.status(200);
+        }
+    });
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+</description>
+        <pubDate>Thu, 21 Jan 2016 00:00:00 -0800</pubDate>
+        <link>/2016/01/21/bcrypt.html</link>
+        <guid isPermaLink="true">/2016/01/21/bcrypt.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Welcome to Jekyll!</title>
+        <description>&lt;p&gt;You’ll find this post in your &lt;code class=&quot;highlighter-rouge&quot;&gt;_posts&lt;/code&gt; directory. Go ahead and edit it and re-build the site to see your changes. You can rebuild the site in many different ways, but the most common way is to run &lt;code class=&quot;highlighter-rouge&quot;&gt;jekyll serve&lt;/code&gt;, which launches a web server and auto-regenerates your site when a file is updated.&lt;/p&gt;
+
+&lt;p&gt;To add new posts, simply add a file in the &lt;code class=&quot;highlighter-rouge&quot;&gt;_posts&lt;/code&gt; directory that follows the convention &lt;code class=&quot;highlighter-rouge&quot;&gt;YYYY-MM-DD-name-of-post.ext&lt;/code&gt; and includes the necessary front matter. Take a look at the source for this post to get an idea about how it works.&lt;/p&gt;
+
+&lt;p&gt;Jekyll also offers powerful support for code snippets:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-ruby&quot; data-lang=&quot;ruby&quot;&gt;&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;print_hi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;nb&quot;&gt;puts&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Hi, &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;#{&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;print_hi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&#39;Tom&#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;#=&amp;gt; prints &#39;Hi, Tom&#39; to STDOUT.&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Check out the &lt;a href=&quot;http://jekyllrb.com/docs/home&quot;&gt;Jekyll docs&lt;/a&gt; for more info on how to get the most out of Jekyll. File all bugs/feature requests at &lt;a href=&quot;https://github.com/jekyll/jekyll&quot;&gt;Jekyll’s GitHub repo&lt;/a&gt;. If you have questions, you can ask them on &lt;a href=&quot;https://talk.jekyllrb.com/&quot;&gt;Jekyll Talk&lt;/a&gt;.&lt;/p&gt;
+
+</description>
+        <pubDate>Sat, 02 Jan 2016 04:53:10 -0800</pubDate>
+        <link>/jekyll/update/2016/01/02/welcome-to-jekyll.html</link>
+        <guid isPermaLink="true">/jekyll/update/2016/01/02/welcome-to-jekyll.html</guid>
+        
+        
+        <category>jekyll</category>
+        
+        <category>update</category>
+        
+      </item>
+    
+      <item>
+        <title>Just another year on the sands of time</title>
+        <description>&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
+quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
+consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
+proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&lt;/p&gt;
+
+&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
+quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
+consequat.&lt;/p&gt;
+
+&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
+quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
+consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
+proident, sunt in culpa qui officia deserunt mollit anim id est laborum.Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
+quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
+consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
+proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 01 Jan 2016 04:53:10 -0800</pubDate>
+        <link>/jekyll/update/2016/01/01/just-another-year.html</link>
+        <guid isPermaLink="true">/jekyll/update/2016/01/01/just-another-year.html</guid>
+        
+        
+        <category>jekyll</category>
+        
+        <category>update</category>
+        
+      </item>
+    
+      <item>
+        <title>Bestpractices</title>
+        <description>&lt;p&gt;&lt;img src=&quot;../images/CodingBestPractices.jpg&quot; class=&quot;fit image&quot; /&gt;&lt;/p&gt;
+&lt;h3&gt;Coding Best Practices&lt;/h3&gt;
+&lt;p&gt;-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.&lt;/p&gt;
+&lt;p&gt;-Before you even touch your keyboard, Psorta-code (thinking in head when working by yourself or talking to your pair about what you think will work) then Pseudocode (Write down how your code is going to be implemented in pure words, meaning not actually coding language)&lt;/p&gt;
+&lt;p&gt;-When working on complex problems, such as forming algorithms, break down the problem into sections.&lt;/p&gt;
+&lt;p&gt;-An error message on your console is yourt friend, but when your code spits out unexpected values (assuming that you have worked out your logic), the Chrome Developer Tools is going to be your new best friend.&lt;/p&gt;
+&lt;p&gt;-When debugging, DONT BE SUPERSTITIOUS, be deliberate, form a theory then test the theory. Don’t just move things around or edit things without thinking it through, you wrote that piece of code there for a reason.&lt;/p&gt;
+&lt;p&gt;-Develop your workflow (Such as committing your work through git periodically)&lt;/p&gt;
+&lt;p&gt;-Get used to using the keyboard shortcuts on your text editor. It doesn’t matter if you’re using Sublime Text, Vim, Atom, Emacs, or Notepad++. If you’re not efficient with it, you are unnecessarily wasting your time, so don’t let other people convince you about which text editor is the best for you. Remember, Time &amp;gt;= $$$.&lt;/p&gt;
+&lt;p&gt;-To learn about OSX, Alfred, Sublime, Chrome, Bash shortcuts, checkout Josh Wyatt’s Github Repository https://github.com/joshwyatt/keyboard_shortcuts&lt;/p&gt;
+&lt;p&gt;-Encapsulation/Isolation/Modularity: Loose coupling comes with writing code with high modularity&lt;/p&gt;
+&lt;p&gt;-Encapsulation: a mechanism for wrapping the data (variables) and code acting on the data (methods) together as a single unit. (www.tutorialspoint.com/java/java_encapsulation.htm)&lt;/p&gt;
+&lt;p&gt;-Modularity refers to the dividing of an application into smaller modules. Such as having a library in a different file than the rest of your code.&lt;/p&gt;
+&lt;p&gt;-Loose coupling: you do not want your code to depend on others’ code&lt;/p&gt;
+&lt;p&gt;-Thin interface: writing a function in a way that in only takes in a handful of parameters. &lt;/p&gt;
+&lt;p&gt;-Intuitive abstractions: such as “well-written” function and variable names (self-documenting code) will save you a ton of time from having to go through your code and figuring out which is what. more readable and understandable.&lt;/p&gt;
+&lt;p&gt;-Input all dependencies: Avoid global or closure variables (Unless you know exactly what you are doing and intentionally want to taint a global variable)&lt;/p&gt;
+&lt;p&gt;-Similar to what I stated above, ideally, you don’t want to have side effects on things such as the input, global or closure variables.&lt;/p&gt;
+&lt;p&gt;-After you have a finished an MVP with no existing edge cases, style your code into shorter/ fewer/ clear lines. Basically cleaning up after yourself.&lt;/p&gt;
+&lt;p&gt;-DRY (Don’t repeat yourself)  vs  WET (We Enjoy Typing). WET is a joke among programmers. The third time you rewrite or copy and paste your code for a different function implementation, you are just showing off your inefficiency.&lt;/p&gt;
+&lt;p&gt;-“Always be humble and be ready to learn. This is a rapidly advancing field, if you start to think that you know everything, you’ll fall behind everyone else in no time.”     (Laurie Voss CTO at NPM http://sel.do)&lt;/p&gt;
+</description>
+        <pubDate>Fri, 11 Dec 2015 00:00:00 -0800</pubDate>
+        <link>/2015/12/11/bestPractices.html</link>
+        <guid isPermaLink="true">/2015/12/11/bestPractices.html</guid>
+        
+        
+      </item>
+    
+  </channel>
+</rss>
