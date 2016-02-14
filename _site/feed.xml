@@ -6,15 +6,15 @@
 </description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 09 Feb 2016 19:35:24 -0800</pubDate>
-    <lastBuildDate>Tue, 09 Feb 2016 19:35:24 -0800</lastBuildDate>
+    <pubDate>Sun, 14 Feb 2016 13:58:59 -0800</pubDate>
+    <lastBuildDate>Sun, 14 Feb 2016 13:58:59 -0800</lastBuildDate>
     <generator>Jekyll v3.1.1</generator>
     
       <item>
         <title>Tesseract</title>
-        <description>&lt;h4 id=&quot;tesseract-is-an-ocr-optical-character-recognition-engine-that-was-originally-developed-at-hewlett-packard-laboratories-but-has-been-sponsered-and-improved-by-google-since-2006&quot;&gt;Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.&lt;/h4&gt;
+        <description>&lt;h6&gt;Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.&lt;/h6&gt;
 
-&lt;h3 id=&quot;basic-setup&quot;&gt;Basic setup&lt;/h3&gt;
+&lt;h5&gt;Basic setup&lt;/h5&gt;
 &lt;p&gt;To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install leptonica&lt;/code&gt;&lt;/p&gt;
 
 &lt;p&gt;After that, install tesseract globally by running &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install tesseract&lt;/code&gt;&lt;/p&gt;
@@ -26,7 +26,7 @@ Without specifying a language code, by default it will only install the package 
 
 &lt;p&gt;Besides global installation for local server development, to install the OCR engine for node, you need to run &lt;code class=&quot;highlighter-rouge&quot;&gt;npm install node-tesseract&lt;/code&gt; to include as a node-module.&lt;/p&gt;
 
-&lt;h4 id=&quot;now-on-to-the-implementation&quot;&gt;Now, on to the implementation&lt;/h4&gt;
+&lt;h5&gt;Now, on to the implementation&lt;/h5&gt;
 
 &lt;p&gt;First off, unless you use browserify to require the module on the frontend, all of the magic will happen on the backend.&lt;/p&gt;
 
@@ -74,14 +74,14 @@ Without specifying a language code, by default it will only install the package 
         <title>Bcrypt</title>
         <description>&lt;p&gt;&lt;a href=&quot;http://imgur.com/apGs9hk&quot;&gt;&lt;img src=&quot;http://i.imgur.com/apGs9hk.jpg&quot; title=&quot;source: imgur.com&quot; /&gt;&lt;/a&gt;&lt;/p&gt;
 
-&lt;h4 id=&quot;this-guide-is-to-assist-struggling-programmers-step-through-their-own-implementation-of-bcrypt-with-nodejs&quot;&gt;This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js&lt;/h4&gt;
-&lt;p&gt;Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.&lt;/p&gt;
+&lt;p&gt;This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js
+Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.&lt;/p&gt;
 
 &lt;p&gt;While there are many different ways to salt and hash data, using bcrypt is among the easiest methods.&lt;/p&gt;
 
 &lt;p&gt;Implementing bcrypt for a synchronous usage is almost too easy, but for an asynchronous usage, there can be an issue.&lt;/p&gt;
 
-&lt;h3 id=&quot;asynchronous-implementation&quot;&gt;Asynchronous implementation&lt;/h3&gt;
+&lt;h4&gt;Asynchronous implementation&lt;/h4&gt;
 
 &lt;p&gt;When utilizing a promise, from the server, following the documentation’s example will not work, due to the fact that it is expecting a promise from the database-side.&lt;/p&gt;
 
@@ -99,7 +99,7 @@ First, you install the module using&lt;/p&gt;
 
 &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var Q = require(&#39;q&#39;);&lt;/code&gt;&lt;/p&gt;
 
-&lt;h4 id=&quot;creating-a-new-user&quot;&gt;Creating a new user&lt;/h4&gt;
+&lt;h5&gt;Creating a new user&lt;/h5&gt;
 &lt;p&gt;When you are inserting a user’s credentials, before salting and hashing takes place, you declare a variable that will handle the deferment.&lt;/p&gt;
 
 &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var defer = Q.defer();&lt;/code&gt;&lt;/p&gt;
@@ -117,7 +117,7 @@ bcrypt.genSalt(10, function(err, salt) {
 
 &lt;p&gt;The issue that I faced while following the example was that I the function itself, could not be used with a &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; or a return statement.&lt;/p&gt;
 
-&lt;h4 id=&quot;heres-my-implementation-of-creating-a-user&quot;&gt;Here’s my implementation of creating a user&lt;/h4&gt;
+&lt;h5&gt;Here&#39;s my implementation of creating a user&lt;/h5&gt;
 
 &lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.createUser = function(obj) {
     var defer = Q.defer();
@@ -145,7 +145,7 @@ bcrypt.genSalt(10, function(err, salt) {
 &lt;/code&gt;&lt;/pre&gt;
 &lt;/div&gt;
 
-&lt;h4 id=&quot;checking-a-users-password&quot;&gt;Checking a user’s password&lt;/h4&gt;
+&lt;h5&gt;Checking a user&#39;s password&lt;/h5&gt;
 &lt;p&gt;Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the &lt;code class=&quot;highlighter-rouge&quot;&gt;.compare&lt;/code&gt; method instead of the &lt;code class=&quot;highlighter-rouge&quot;&gt;.genSalt&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;.hash&lt;/code&gt;.&lt;/p&gt;
 
 &lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.findUser = function(obj) {
@@ -170,7 +170,7 @@ bcrypt.genSalt(10, function(err, salt) {
 
 &lt;p&gt;Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; promise can be utilized.&lt;/p&gt;
 
-&lt;h4 id=&quot;example-of-a-request-handler-using-express&quot;&gt;Example of a request handler using express&lt;/h4&gt;
+&lt;h5&gt;Example of a request handler using express&lt;/h5&gt;
 
 &lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;app.post(&#39;/createUser&#39;, function(req, res, next) {
     db.createUser(req.body).then(function(user, err) {
@@ -188,71 +188,6 @@ bcrypt.genSalt(10, function(err, salt) {
         <link>/2016/01/21/bcrypt.html</link>
         <guid isPermaLink="true">/2016/01/21/bcrypt.html</guid>
         
-        
-      </item>
-    
-      <item>
-        <title>Welcome to Jekyll!</title>
-        <description>&lt;p&gt;You’ll find this post in your &lt;code class=&quot;highlighter-rouge&quot;&gt;_posts&lt;/code&gt; directory. Go ahead and edit it and re-build the site to see your changes. You can rebuild the site in many different ways, but the most common way is to run &lt;code class=&quot;highlighter-rouge&quot;&gt;jekyll serve&lt;/code&gt;, which launches a web server and auto-regenerates your site when a file is updated.&lt;/p&gt;
-
-&lt;p&gt;To add new posts, simply add a file in the &lt;code class=&quot;highlighter-rouge&quot;&gt;_posts&lt;/code&gt; directory that follows the convention &lt;code class=&quot;highlighter-rouge&quot;&gt;YYYY-MM-DD-name-of-post.ext&lt;/code&gt; and includes the necessary front matter. Take a look at the source for this post to get an idea about how it works.&lt;/p&gt;
-
-&lt;p&gt;Jekyll also offers powerful support for code snippets:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-ruby&quot; data-lang=&quot;ruby&quot;&gt;&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;print_hi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-  &lt;span class=&quot;nb&quot;&gt;puts&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Hi, &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;#{&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;
-&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
-&lt;span class=&quot;n&quot;&gt;print_hi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&#39;Tom&#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;#=&amp;gt; prints &#39;Hi, Tom&#39; to STDOUT.&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Check out the &lt;a href=&quot;http://jekyllrb.com/docs/home&quot;&gt;Jekyll docs&lt;/a&gt; for more info on how to get the most out of Jekyll. File all bugs/feature requests at &lt;a href=&quot;https://github.com/jekyll/jekyll&quot;&gt;Jekyll’s GitHub repo&lt;/a&gt;. If you have questions, you can ask them on &lt;a href=&quot;https://talk.jekyllrb.com/&quot;&gt;Jekyll Talk&lt;/a&gt;.&lt;/p&gt;
-
-</description>
-        <pubDate>Sat, 02 Jan 2016 04:53:10 -0800</pubDate>
-        <link>/jekyll/update/2016/01/02/welcome-to-jekyll.html</link>
-        <guid isPermaLink="true">/jekyll/update/2016/01/02/welcome-to-jekyll.html</guid>
-        
-        
-        <category>jekyll</category>
-        
-        <category>update</category>
-        
-      </item>
-    
-      <item>
-        <title>Just another year on the sands of time</title>
-        <description>&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
-consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
-cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
-proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&lt;/p&gt;
-
-&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
-consequat.&lt;/p&gt;
-
-&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
-consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
-cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
-proident, sunt in culpa qui officia deserunt mollit anim id est laborum.Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
-consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
-cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
-proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&lt;/p&gt;
-</description>
-        <pubDate>Fri, 01 Jan 2016 04:53:10 -0800</pubDate>
-        <link>/jekyll/update/2016/01/01/just-another-year.html</link>
-        <guid isPermaLink="true">/jekyll/update/2016/01/01/just-another-year.html</guid>
-        
-        
-        <category>jekyll</category>
-        
-        <category>update</category>
         
       </item>
     

@@ -3,9 +3,9 @@ layout: post
 ---
 
 
-####Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.
+<h6>Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.</h6>
 
-###Basic setup
+<h5>Basic setup</h5>
 To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run `brew install leptonica`
 
 After that, install tesseract globally by running `brew install tesseract`
@@ -17,7 +17,7 @@ Without specifying a language code, by default it will only install the package 
 
 Besides global installation for local server development, to install the OCR engine for node, you need to run `npm install node-tesseract` to include as a node-module.
 
-####Now, on to the implementation
+<h5>Now, on to the implementation</h5>
 
 First off, unless you use browserify to require the module on the frontend, all of the magic will happen on the backend.
 
