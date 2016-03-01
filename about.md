@@ -3,13 +3,12 @@ layout: page
 title: About
 permalink: /about/
 ---
-<h3>About me</h3>
-I'm a fullstack developer who enjoys building applications
-and overcoming technical challenges. I mainly specialized in
-building applications using the MEAN stack, but I am very 
-comfortable with picking up new languages as well as technologies.
+I'm a fullstack developer who enjoys building applications <br>
+and overcoming technical challenges. I mainly specialized in <br>
+building applications using the MEAN stack, but I am very <br>
+comfortable with picking up new languages as well as technologies. <br>
 
 <h3>Contact Info</h3>
-email:daniel.kim1116@gmail.com
-github: <a href='https://github.com/dkim1116'>https://github.com/dkim1116</a>
+email:daniel.kim1116@gmail.com <br>
+github: <a href='https://github.com/dkim1116'>https://github.com/dkim1116</a> <br>
 linkedin: <a href='https://www.linkedin.com/in/dkim1116'>https://www.linkedin.com/in/dkim1116</a>
