@@ -5,8 +5,8 @@
     <description></description>
     <link>http://dkim1116.github.io/http://dkim1116.github.io//</link>
     <atom:link href="http://dkim1116.github.io/http://dkim1116.github.io//feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 01 Mar 2016 15:58:31 -0800</pubDate>
-    <lastBuildDate>Tue, 01 Mar 2016 15:58:31 -0800</lastBuildDate>
+    <pubDate>Tue, 01 Mar 2016 16:51:24 -0800</pubDate>
+    <lastBuildDate>Tue, 01 Mar 2016 16:51:24 -0800</lastBuildDate>
     <generator>Jekyll v3.1.1</generator>
     
       <item>
@@ -85,7 +85,7 @@ Since the genesis of the internet, salting and hashing an important piece of inf
 &lt;p&gt;When utilizing a promise, from the server, following the documentation’s example will not work, due to the fact that it is expecting a promise from the database-side.&lt;/p&gt;
 
 &lt;p&gt;The solution that I was able to conceive was to use ‘Q’. Which is one of the many tools that is used to create and compose asynchronous promises.
-Implementing ‘q’ with bcrypt turned out to be quite simple.
+Implementing ‘Q’ with bcrypt turned out to be quite simple.
 First, you install the module using&lt;/p&gt;
 
 &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;npm install Q&lt;/code&gt;&lt;/p&gt;
