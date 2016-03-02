@@ -9,6 +9,6 @@ building applications using the MEAN stack, but I am very <br>
 comfortable with picking up new languages as well as technologies. <br>
 
 <h3>Contact Info</h3>
-email:daniel.kim1116@gmail.com <br>
+email:<a href='daniel.kim1116@gmail.com'>daniel.kim1116@gmail.com</a> <br>
 github: <a href='https://github.com/dkim1116'>https://github.com/dkim1116</a> <br>
 linkedin: <a href='https://www.linkedin.com/in/dkim1116'>https://www.linkedin.com/in/dkim1116</a>
