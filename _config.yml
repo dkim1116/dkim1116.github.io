@@ -10,8 +10,7 @@ title: Daniel Kim - Fullstack Developer with interest in Web Security
 email: daniel.kim1116@gmail.com
 description: > # this means to ignore newlines until "baseurl:"
 
-baseurl: "http://dkim1116.github.io/" # the subpath of your site, e.g. /blog
-url: "http://dkim1116.github.io/" # the base hostname & protocol for your site
+baseurl: "http://dkim1116.github.io/" # the subpath of your site, e.g. /blog # the base hostname & protocol for your site
 twitter_username: dkim1116
 github_username:  dkim1116
 

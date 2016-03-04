@@ -3,9 +3,9 @@ layout: page
 title: About
 permalink: /about/
 ---
-I'm a fullstack developer who enjoys building applications <br>
+I'm a software engineer who enjoys building applications <br>
 and overcoming technical challenges. I mainly specialized in <br>
-building applications using the MEAN stack, but I am very <br>
+building applications using the MEAN stack, and I am very <br>
 comfortable with picking up new languages as well as technologies. <br>
 
 <h3>Contact Info</h3>
