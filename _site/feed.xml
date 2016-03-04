@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Daniel Kim - Fullstack Developer with interest in Web Security</title>
+    <title>Daniel Kim - Software Engineer</title>
     <description></description>
     <link>http://dkim1116.github.io//</link>
     <atom:link href="http://dkim1116.github.io//feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 03 Mar 2016 19:05:24 -0800</pubDate>
-    <lastBuildDate>Thu, 03 Mar 2016 19:05:24 -0800</lastBuildDate>
+    <pubDate>Thu, 03 Mar 2016 19:06:15 -0800</pubDate>
+    <lastBuildDate>Thu, 03 Mar 2016 19:06:15 -0800</lastBuildDate>
     <generator>Jekyll v3.1.1</generator>
     
       <item>
