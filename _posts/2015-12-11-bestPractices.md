@@ -1,7 +1,7 @@
 ---
 layout: post
 ---
-<a href="http://imgur.com/67jXDCW"><img src="http://i.imgur.com/67jXDCW.jpg" title="source: imgur.com" /></a>
+<img src="{{ '/images/CodingBestPractices.jpg' | relative_url }}" alt="Coding best practices cover image">
 
 <h3>Coding Best Practices</h3>
 <p>-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.</p>

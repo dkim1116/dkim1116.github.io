@@ -47,5 +47,5 @@ If the photo is fully colored, you need to filter the photo to be monochrome (bl
 
 Here is the result that I got
 
-<a href="http://imgur.com/pNOqQGk"><img src="http://i.imgur.com/pNOqQGk.jpg" title="source: imgur.com" /></a>
-<a href="http://imgur.com/7wzyvBA"><img src="http://i.imgur.com/7wzyvBA.png" title="source: imgur.com" /></a>
+<img src="{{ '/images/tesseract.jpg' | relative_url }}" alt="Tesseract OCR example image">
+<img src="{{ '/images/tesseract2.png' | relative_url }}" alt="Tesseract OCR output example">
