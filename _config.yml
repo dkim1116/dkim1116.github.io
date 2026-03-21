@@ -6,14 +6,14 @@
 # 'jekyll serve'. If you change this file, please restart the server process.
 
 # Site settings
-title: Daniel Kim - Software Engineer
+title: Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure
 email: daniel.kim1116@gmail.com
 description: > # this means to ignore newlines until "baseurl:"
   Notes on software engineering, backend development, and problem solving.
 
 url: "https://dkim1116.github.io"
 baseurl: "" # the subpath of your site, e.g. /blog
-twitter_username: dkim1116
+linkedin_url: "https://www.linkedin.com/in/dkim1116/"
 github_username:  dkim1116
 
 # Build settings

@@ -1,5 +1,6 @@
 ---
 layout: post
+title: "Coding Best Practices"
 ---
 <img src="{{ '/images/CodingBestPractices.jpg' | relative_url }}" alt="Coding best practices cover image">
 

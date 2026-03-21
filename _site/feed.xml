@@ -1,29 +1,761 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Daniel Kim - Software Engineer</title>
-    <description></description>
-    <link>http://dkim1116.github.io//</link>
-    <atom:link href="http://dkim1116.github.io//feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 03 Mar 2016 19:43:36 -0800</pubDate>
-    <lastBuildDate>Thu, 03 Mar 2016 19:43:36 -0800</lastBuildDate>
-    <generator>Jekyll v3.1.1</generator>
+    <title>Daniel Kim - Senior Backend Engineer | Distributed Systems &amp; Infrastructure</title>
+    <description>Notes on software engineering, backend development, and problem solving.
+</description>
+    <link>http://localhost:4000/</link>
+    <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Fri, 20 Mar 2026 17:49:10 -0700</pubDate>
+    <lastBuildDate>Fri, 20 Mar 2026 17:49:10 -0700</lastBuildDate>
+    <generator>Jekyll v4.4.1</generator>
     
       <item>
-        <title>Tesseract</title>
+        <title>Designing a Yelp-like System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a Yelp-like system.&lt;/p&gt;
+
+&lt;p&gt;I liked this one because it mixes a few different things at once:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;search (text + geo)&lt;/li&gt;
+  &lt;li&gt;relational data (users, reviews)&lt;/li&gt;
+  &lt;li&gt;ranking + performance&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This definitely is not meant to be a perfect design. These are basically my notes on how I’d reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-initial-thought-and-why-it-breaks&quot;&gt;🧠 Initial Thought (and why it breaks)&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;“Just query a database with filters like name, category, and location”&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;But that falls apart quickly for queries like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;“ramen near me”&lt;/li&gt;
+  &lt;li&gt;“best sushi in SF”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That’s when it clicked:&lt;/p&gt;
+
+&lt;p&gt;👉 This is not just a database problem — it’s a &lt;strong&gt;search system problem&lt;/strong&gt;&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-high-level-architecture&quot;&gt;🏗️ High-Level Architecture&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/yelp-architecture.png&quot; alt=&quot;Yelp-like system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The biggest thing that shaped my design was realizing that search and writes have very different needs.&lt;/p&gt;
+
+&lt;p&gt;So in my head I split the system into two paths:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;search (read-heavy, low latency)&lt;/li&gt;
+  &lt;li&gt;writes (business + reviews)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For search, I want low latency and flexible querying, so I’d send those requests to Elasticsearch.&lt;/p&gt;
+
+&lt;p&gt;For writes, I still want the SQL database to be the source of truth. So business updates and review writes go to SQL first, then I update Elasticsearch asynchronously after that.&lt;/p&gt;
+
+&lt;p&gt;The event bus and indexer are basically just there so I can keep Elasticsearch in sync without blocking the user-facing write path.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;SQL DB&lt;/strong&gt; → source of truth (correct data)&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Elasticsearch&lt;/strong&gt; → fast search (text + geo + ranking)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-search-flow&quot;&gt;🔍 Search Flow&lt;/h2&gt;
+&lt;p&gt;&lt;img src=&quot;/images/yelp-search-flow.png&quot; alt=&quot;Yelp-like system search flow&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;When I first thought about this, I assumed I’d just query the database.&lt;/p&gt;
+
+&lt;p&gt;But for something like:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;“ramen near me”&lt;/li&gt;
+  &lt;li&gt;“best sushi in SF”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;that gets messy fast.&lt;/p&gt;
+
+&lt;p&gt;That is the point where this stopped feeling like a normal CRUD-style database problem to me.&lt;/p&gt;
+
+&lt;p&gt;So instead, I’d have the request go through a Search Service and then straight to Elasticsearch.&lt;/p&gt;
+
+&lt;p&gt;Elasticsearch handles:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;text matching (ramen, sushi, etc.)&lt;/li&gt;
+  &lt;li&gt;filtering (category)&lt;/li&gt;
+  &lt;li&gt;geo queries (distance)&lt;/li&gt;
+  &lt;li&gt;ranking&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;and returns the best results.&lt;/p&gt;
+
+&lt;p&gt;That just feels like a much more natural fit than trying to force the main database to handle all of that efficiently.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-geo-search-key-insight&quot;&gt;📍 Geo Search (Key Insight)&lt;/h2&gt;
+
+&lt;p&gt;At first I thought we’d store something like “within 5 miles” in the DB.&lt;/p&gt;
+
+&lt;p&gt;That doesn’t really make sense though.&lt;/p&gt;
+
+&lt;p&gt;Instead:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;each business stores &lt;strong&gt;lat/lon&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;distance is applied &lt;strong&gt;at query time&lt;/strong&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;div class=&quot;language-json highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+  &lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;&quot;location&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;w&quot;&gt; &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+    &lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;&quot;lat&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;w&quot;&gt; &lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;37.77&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+    &lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;&quot;lon&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;w&quot;&gt; &lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;-122.41&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+  &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Then Elasticsearch does:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;“find everything within X miles”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That was one of the small mindset shifts for me. You don’t store the radius result ahead of time. You store coordinates and let the search engine evaluate distance when the query comes in.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-reviews--ratings&quot;&gt;⭐ Reviews + Ratings&lt;/h2&gt;
+
+&lt;p&gt;The naive thought here was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;calculate average rating from all reviews each time&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That’s too slow.&lt;/p&gt;
+
+&lt;p&gt;What makes more sense to me is precomputing the aggregates.&lt;/p&gt;
+
+&lt;p&gt;Store:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ratingSum&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;reviewCount&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;avgRating&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Update on write:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;ratingSum += rating
+reviewCount += 1
+avgRating = ratingSum / reviewCount
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/yelp-review-write-flow.png&quot; alt=&quot;Yelp-like system review write flow&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;This part took me a bit to understand.&lt;/p&gt;
+
+&lt;p&gt;The important thing is:
+👉 don’t block the user while updating search&lt;/p&gt;
+
+&lt;p&gt;So when a user submits a review:&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;I write it to the database&lt;/li&gt;
+  &lt;li&gt;update the business rating (sum + count)&lt;/li&gt;
+  &lt;li&gt;then emit an event&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That event eventually updates Elasticsearch.&lt;/p&gt;
+
+&lt;p&gt;So search results stay &lt;em&gt;close to real-time&lt;/em&gt;, but I’m not slowing down the write path.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-one-review-per-user&quot;&gt;✍️ One Review Per User&lt;/h2&gt;
+
+&lt;p&gt;One constraint I’d want is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;one user → one review per business&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;solution&quot;&gt;Solution&lt;/h3&gt;
+
+&lt;div class=&quot;language-sql highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;UNIQUE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user_id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;business_id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Optional:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use &lt;strong&gt;upsert&lt;/strong&gt; to allow edits instead of duplicates&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-keeping-elasticsearch-in-sync&quot;&gt;🔁 Keeping Elasticsearch in Sync&lt;/h2&gt;
+
+&lt;p&gt;This was one of the parts I went back and forth on the most.&lt;/p&gt;
+
+&lt;p&gt;There are a couple ways I could think about it:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;application-level events&lt;/li&gt;
+  &lt;li&gt;CDC / change data capture off the database&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The direction I lean toward first is application-level events because it feels easier for me to reason about while I’m still practicing this stuff.&lt;/p&gt;
+
+&lt;p&gt;So the mental model I’m using is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;write to DB first&lt;/li&gt;
+  &lt;li&gt;publish an event&lt;/li&gt;
+  &lt;li&gt;consumer/indexer updates Elasticsearch&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That gives me a write path that stays fast, while still keeping search reasonably fresh.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-searching-by-location-name&quot;&gt;📍 Searching by Location Name&lt;/h2&gt;
+
+&lt;p&gt;Users don’t always search by coordinates.&lt;/p&gt;
+
+&lt;p&gt;They search:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;“San Francisco”&lt;/li&gt;
+  &lt;li&gt;“Mission District”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;approach&quot;&gt;Approach&lt;/h3&gt;
+
+&lt;p&gt;We store:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;predefined location names&lt;/li&gt;
+  &lt;li&gt;polygon boundaries&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Then the flow in my head is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;resolve name → polygon&lt;/li&gt;
+  &lt;li&gt;apply geo filter in ES&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Since the list is finite:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;we can cache it heavily&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-mapping-businesses-to-locations&quot;&gt;🧩 Mapping Businesses to Locations&lt;/h2&gt;
+
+&lt;p&gt;When a business is created:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;take lat/lon&lt;/li&gt;
+  &lt;li&gt;find matching polygons (city, neighborhood)&lt;/li&gt;
+  &lt;li&gt;store labels on business&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The reason I like this is that I’d rather compute that once on write than recompute it on every search query.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-tradeoffs&quot;&gt;🚧 Tradeoffs&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Elasticsearch is eventually consistent&lt;/li&gt;
+  &lt;li&gt;small delay before updates show in search&lt;/li&gt;
+  &lt;li&gt;extra complexity (event pipeline)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;much faster search&lt;/li&gt;
+  &lt;li&gt;better scalability&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;To me that tradeoff feels worth it for this kind of system.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-what-i-learned&quot;&gt;🧠 What I Learned&lt;/h2&gt;
+
+&lt;p&gt;The biggest things this made me realize were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;not all queries belong in the main database&lt;/li&gt;
+  &lt;li&gt;search systems solve a different kind of problem than SQL databases&lt;/li&gt;
+  &lt;li&gt;precomputing things like ratings and location labels matters a lot&lt;/li&gt;
+  &lt;li&gt;event-driven patterns show up really quickly once you care about scale and latency&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-final-thoughts&quot;&gt;📌 Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This problem made me realize pretty quickly that designing for &lt;strong&gt;search&lt;/strong&gt; is very different from designing for &lt;strong&gt;data storage&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;p&gt;I’m still learning, but this one helped me understand why search-heavy systems need a different mental model than normal CRUD applications.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-future-improvements&quot;&gt;🚀 Future Improvements&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Redis caching for hot queries&lt;/li&gt;
+  &lt;li&gt;better ranking:&lt;/li&gt;
+  &lt;li&gt;distance + rating + popularity&lt;/li&gt;
+  &lt;li&gt;cursor-based pagination&lt;/li&gt;
+  &lt;li&gt;sharding for scale&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+</description>
+        <pubDate>Fri, 20 Mar 2026 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2026/03/20/yelpSystemDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/20/yelpSystemDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Designing a URL Shortener System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a URL shortener system like Bit.ly.&lt;/p&gt;
+
+&lt;p&gt;At first this one felt much simpler than something like Yelp, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.&lt;/p&gt;
+
+&lt;p&gt;The parts I kept coming back to were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;high read traffic&lt;/li&gt;
+  &lt;li&gt;caching strategies&lt;/li&gt;
+  &lt;li&gt;uniqueness guarantees&lt;/li&gt;
+  &lt;li&gt;ID generation&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;These are basically my notes on how I’d reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-requirements&quot;&gt;🧠 Requirements&lt;/h2&gt;
+
+&lt;h3 id=&quot;functional&quot;&gt;Functional&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Shorten a long URL&lt;/li&gt;
+  &lt;li&gt;Redirect from short URL to original URL&lt;/li&gt;
+  &lt;li&gt;Optional:&lt;/li&gt;
+  &lt;li&gt;custom alias&lt;/li&gt;
+  &lt;li&gt;expiration date&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;non-functional&quot;&gt;Non-Functional&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Low latency reads (~200ms)&lt;/li&gt;
+  &lt;li&gt;High availability over strict consistency&lt;/li&gt;
+  &lt;li&gt;Uniqueness of short URLs&lt;/li&gt;
+  &lt;li&gt;Scale to:&lt;/li&gt;
+  &lt;li&gt;~1B URLs&lt;/li&gt;
+  &lt;li&gt;~100M DAU&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-core-entities&quot;&gt;🧱 Core Entities&lt;/h2&gt;
+
+&lt;p&gt;The main data I care about is pretty simple:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;short URL&lt;/li&gt;
+  &lt;li&gt;long URL&lt;/li&gt;
+  &lt;li&gt;user (optional)&lt;/li&gt;
+  &lt;li&gt;expiration metadata (optional)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-api-design&quot;&gt;🔌 API Design&lt;/h2&gt;
+
+&lt;h3 id=&quot;create-short-url&quot;&gt;Create Short URL&lt;/h3&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;err&quot;&gt;POST /shorten
+{
+  originalUrl,
+  alias?,
+  expirationDate?
+}
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;redirect&quot;&gt;Redirect&lt;/h3&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;err&quot;&gt;GET /{shortURL}
+→ 302 Redirect
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-high-level-architecture&quot;&gt;🏗️ High-Level Architecture&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/bitly-architecture.png&quot; alt=&quot;URL shortener high-level architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The biggest thing that shaped my design was the fact that this is a very read-heavy system.&lt;/p&gt;
+
+&lt;p&gt;Because of that, I’d separate the read path from the write path pretty early instead of treating everything as one service.&lt;/p&gt;
+
+&lt;p&gt;For writes, the flow in my head is basically:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;user sends long URL&lt;/li&gt;
+  &lt;li&gt;request goes through the API Gateway&lt;/li&gt;
+  &lt;li&gt;Write Service generates a unique ID&lt;/li&gt;
+  &lt;li&gt;ID gets Base62 encoded&lt;/li&gt;
+  &lt;li&gt;short URL mapping gets stored in the database&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For reads, I want the hot path to avoid the database as much as possible:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;client hits CDN first&lt;/li&gt;
+  &lt;li&gt;if CDN misses, request goes to the Read Service&lt;/li&gt;
+  &lt;li&gt;Read Service checks Redis&lt;/li&gt;
+  &lt;li&gt;if Redis misses, then fall back to the database&lt;/li&gt;
+  &lt;li&gt;return a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;302&lt;/code&gt; once the original URL is found&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So in my head the database is still the source of truth, but ideally most of the redirect traffic gets absorbed by the cache layers.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-read-flow-redirect&quot;&gt;🔁 Read Flow (Redirect)&lt;/h2&gt;
+
+&lt;p&gt;Once I accepted that redirects are the hot path, the read flow felt a lot more straightforward.&lt;/p&gt;
+
+&lt;p&gt;When someone visits a short URL, I want the system to find the original URL and send back a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;302&lt;/code&gt; as quickly as possible.&lt;/p&gt;
+
+&lt;p&gt;The first stop is the CDN. If the redirect is cached there, that is the best case because we avoid the backend entirely.&lt;/p&gt;
+
+&lt;p&gt;If it misses, the request goes through the API Gateway to the Read Service. From there, I’d check Redis first for the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;shortURL -&amp;gt; longURL&lt;/code&gt; mapping.&lt;/p&gt;
+
+&lt;p&gt;If Redis has it, great, return the redirect immediately.&lt;/p&gt;
+
+&lt;p&gt;If Redis misses, then I’d hit the database. If the mapping exists and has not expired, return the long URL and probably warm Redis on the way back. If it is expired or missing, return &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;404&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;So the basic goal is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;hottest redirects served by CDN&lt;/li&gt;
+  &lt;li&gt;next layer served by Redis&lt;/li&gt;
+  &lt;li&gt;database only used on misses&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-write-flow-shorten-url&quot;&gt;✍️ Write Flow (Shorten URL)&lt;/h2&gt;
+
+&lt;p&gt;The write path matters less for raw latency, but this is where I care a lot more about correctness and uniqueness.&lt;/p&gt;
+
+&lt;p&gt;When a user submits a long URL, I’d send that request through the API Gateway into the Write Service.&lt;/p&gt;
+
+&lt;p&gt;The Write Service would:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;generate a unique numeric ID&lt;/li&gt;
+  &lt;li&gt;encode it with Base62&lt;/li&gt;
+  &lt;li&gt;save the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;shortURL -&amp;gt; longURL&lt;/code&gt; mapping in the database&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I like this approach more than trying to be clever with hashing because the uniqueness story feels much cleaner.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-how-url-shortening-works&quot;&gt;🔑 How URL Shortening Works&lt;/h2&gt;
+
+&lt;p&gt;Initially I thought:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;“Just hash the URL”&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That sounded fine at first, but the more I thought about it, the less I liked it.&lt;/p&gt;
+
+&lt;p&gt;Hashing can cause collisions, and once that happens I now need extra logic for detection, retries, and collision handling.&lt;/p&gt;
+
+&lt;p&gt;The cleaner option for me was:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use a &lt;strong&gt;global counter&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;encode using &lt;strong&gt;Base62&lt;/strong&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;why-base62&quot;&gt;Why Base62?&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;uses &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;[a-zA-Z0-9]&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;short and URL-friendly&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Example:&lt;/p&gt;
+
+&lt;div class=&quot;language-text highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;ID: 123456 → &quot;abc123&quot;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-uniqueness-problem&quot;&gt;⚠️ Uniqueness Problem&lt;/h2&gt;
+
+&lt;p&gt;We need:
+👉 every short URL must be unique&lt;/p&gt;
+
+&lt;h3 id=&quot;option-1&quot;&gt;Option 1&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use shortURL as &lt;strong&gt;primary key&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;retry on collision&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This works, but I don’t love it.&lt;/p&gt;
+
+&lt;h3 id=&quot;option-2&quot;&gt;Option 2&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use &lt;strong&gt;global counter + Base62&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;guarantees uniqueness without retries&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is the option I prefer because it reduces ambiguity in the write path.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-redis-counter-design&quot;&gt;🧠 Redis Counter Design&lt;/h2&gt;
+
+&lt;p&gt;I landed on Redis for the counter because it gives me a simple way to generate unique IDs without adding too much complexity.&lt;/p&gt;
+
+&lt;p&gt;Main reasons:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;atomic increment (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;INCR&lt;/code&gt;)&lt;/li&gt;
+  &lt;li&gt;very fast&lt;/li&gt;
+  &lt;li&gt;easy mental model&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;div class=&quot;language-text highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;counter → increment → unique ID → encode → shortURL
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;I’m not saying Redis is the only way to do this, but for this level of design discussion it felt like a reasonable place to start.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-what-if-redis-goes-down&quot;&gt;🚨 What if Redis goes down?&lt;/h2&gt;
+
+&lt;p&gt;This was one of the first failure cases I got stuck on.&lt;/p&gt;
+
+&lt;p&gt;My first thought was that if Redis is responsible for ID generation, it becomes a pretty important dependency.&lt;/p&gt;
+
+&lt;h3 id=&quot;one-approach&quot;&gt;One approach&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use &lt;strong&gt;Redis Cluster&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;replication + failover&lt;/li&gt;
+  &lt;li&gt;multiple nodes&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;tradeoff&quot;&gt;Tradeoff&lt;/h3&gt;
+
+&lt;p&gt;Replication is async by default, so:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;slight gaps possible&lt;/li&gt;
+  &lt;li&gt;acceptable tradeoff for availability&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For this kind of system, I’m okay with gaps in generated IDs. I care much more about availability and uniqueness than perfectly sequential values.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-making-redirects-fast&quot;&gt;⚡ Making Redirects Fast&lt;/h2&gt;
+
+&lt;p&gt;The main idea here is pretty simple:&lt;/p&gt;
+
+&lt;p&gt;👉 optimize reads aggressively&lt;/p&gt;
+
+&lt;h3 id=&quot;1-primary-key-lookup&quot;&gt;1. Primary Key Lookup&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;shortURL&lt;/code&gt; = primary key&lt;/li&gt;
+  &lt;li&gt;O(1) lookup in DB&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;2-redis-cache&quot;&gt;2. Redis Cache&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;cache popular URLs&lt;/li&gt;
+  &lt;li&gt;avoid DB hits&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;3-cdn-layer&quot;&gt;3. CDN Layer&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;edge caching for very hot URLs&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-caching-strategy&quot;&gt;🧊 Caching Strategy&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;CDN → first layer&lt;/li&gt;
+  &lt;li&gt;Redis → second layer&lt;/li&gt;
+  &lt;li&gt;DB → fallback&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is one of those systems where the layering matters a lot more than complicated business logic.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-handling-expiration&quot;&gt;⏳ Handling Expiration&lt;/h2&gt;
+
+&lt;p&gt;If a short URL has an expiration:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;store expiration in DB&lt;/li&gt;
+  &lt;li&gt;also apply TTL in Redis&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;What I’d expect to happen:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Cache entry expires automatically&lt;/li&gt;
+  &lt;li&gt;Request goes to DB&lt;/li&gt;
+  &lt;li&gt;DB sees expired record&lt;/li&gt;
+  &lt;li&gt;Return 404&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-scaling-reads-10k-rps&quot;&gt;📈 Scaling Reads (10k+ RPS)&lt;/h2&gt;
+
+&lt;p&gt;To handle high read traffic:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;CDN caching&lt;/li&gt;
+  &lt;li&gt;Redis cache&lt;/li&gt;
+  &lt;li&gt;horizontally scaled read services&lt;/li&gt;
+  &lt;li&gt;indexed DB (primary key lookup)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The main idea is just to reduce database traffic as much as possible.&lt;/p&gt;
+
+&lt;p&gt;If the CDN can serve the hottest redirects, that is ideal.&lt;/p&gt;
+
+&lt;p&gt;If not, Redis should still absorb a lot of the load before anything reaches the database.&lt;/p&gt;
+
+&lt;p&gt;After that, I’d horizontally scale the Read Service since it is stateless and the traffic pattern is pretty straightforward.&lt;/p&gt;
+
+&lt;p&gt;The database still needs to be indexed on &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;shortURL&lt;/code&gt;, ideally as the primary key, so that misses can still be resolved efficiently. But the whole point of the design is that the database should be the fallback, not the first stop for every redirect.&lt;/p&gt;
+
+&lt;p&gt;So if I had to summarize the strategy in one sentence:&lt;/p&gt;
+
+&lt;p&gt;serve as many redirects as possible from cache, and only use the database when absolutely necessary.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-tradeoffs&quot;&gt;⚖️ Tradeoffs&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Redis replication is async → possible gaps&lt;/li&gt;
+  &lt;li&gt;eventual consistency between cache + DB&lt;/li&gt;
+  &lt;li&gt;cache invalidation complexity&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;much faster reads&lt;/li&gt;
+  &lt;li&gt;scalable system&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is one of those designs where I’m very intentionally accepting some complexity in caching in exchange for much better read performance.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-what-i-learned&quot;&gt;🧠 What I Learned&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Read-heavy systems = optimize caching first&lt;/li&gt;
+  &lt;li&gt;ID generation is a real problem at scale&lt;/li&gt;
+  &lt;li&gt;Simple systems get complicated when you add:&lt;/li&gt;
+  &lt;li&gt;scale&lt;/li&gt;
+  &lt;li&gt;availability&lt;/li&gt;
+  &lt;li&gt;latency constraints&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-final-thoughts&quot;&gt;📌 Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This problem looks simple on the surface, but it pulls in a lot of real-world distributed systems ideas:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;caching layers&lt;/li&gt;
+  &lt;li&gt;ID generation&lt;/li&gt;
+  &lt;li&gt;distributed systems tradeoffs&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I’m still learning, but this one helped me understand how much of system design is really about identifying the hot path and optimizing around it.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-future-improvements&quot;&gt;🚀 Future Improvements&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;analytics (click tracking)&lt;/li&gt;
+  &lt;li&gt;rate limiting per user&lt;/li&gt;
+  &lt;li&gt;custom domain support&lt;/li&gt;
+  &lt;li&gt;sharding DB by hash&lt;/li&gt;
+  &lt;li&gt;bloom filters to reduce DB hits&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Wed, 14 Jul 2021 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2021/07/14/bitlyDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2021/07/14/bitlyDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Using Tesseract with Node.js</title>
         <description>&lt;h6&gt;Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.&lt;/h6&gt;
 
 &lt;h5&gt;Basic setup&lt;/h5&gt;
-&lt;p&gt;To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install leptonica&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;brew install leptonica&lt;/code&gt;&lt;/p&gt;
 
-&lt;p&gt;After that, install tesseract globally by running &lt;code class=&quot;highlighter-rouge&quot;&gt;brew install tesseract&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;After that, install tesseract globally by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;brew install tesseract&lt;/code&gt;&lt;/p&gt;
 
-&lt;p&gt;If you don’t have Homebrew installed, you can install Tesseract using MacPorts by running &lt;code class=&quot;highlighter-rouge&quot;&gt;sudo port install tesseract&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;If you don’t have Homebrew installed, you can install Tesseract using MacPorts by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;sudo port install tesseract&lt;/code&gt;&lt;/p&gt;
 
-&lt;p&gt;If you need the engine to recognize a different language other than English, you need to specify which language you need by running &lt;code class=&quot;highlighter-rouge&quot;&gt;sudo port install tesseract-&amp;lt;languagecode&amp;gt; || brew install tesseract-&amp;lt;languagecode&amp;gt;&lt;/code&gt;
+&lt;p&gt;If you need the engine to recognize a different language other than English, you need to specify which language you need by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;sudo port install tesseract-&amp;lt;languagecode&amp;gt; || brew install tesseract-&amp;lt;languagecode&amp;gt;&lt;/code&gt;
 Without specifying a language code, by default it will only install the package for English recognition.&lt;/p&gt;
 
-&lt;p&gt;Besides global installation for local server development, to install the OCR engine for node, you need to run &lt;code class=&quot;highlighter-rouge&quot;&gt;npm install node-tesseract&lt;/code&gt; to include as a node-module.&lt;/p&gt;
+&lt;p&gt;Besides global installation for local server development, to install the OCR engine for node, you need to run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;npm install node-tesseract&lt;/code&gt; to include as a node-module.&lt;/p&gt;
 
 &lt;h5&gt;Now, on to the implementation&lt;/h5&gt;
 
@@ -31,23 +763,21 @@ Without specifying a language code, by default it will only install the package 
 
 &lt;p&gt;You can simply require in a node file by typing,&lt;/p&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var tesseract = require(&#39;node-tesseract&#39;);
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var tesseract = require(&apos;node-tesseract&apos;);
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;There are several methods that are attached to the ‘tesseract’ variable at this point, but to tell the engine to process the image, the only method you need to use is the &lt;code class=&quot;highlighter-rouge&quot;&gt;.process(path, callback)&lt;/code&gt;, which takes in the path to the image file and a callback.&lt;/p&gt;
+&lt;p&gt;There are several methods that are attached to the ‘tesseract’ variable at this point, but to tell the engine to process the image, the only method you need to use is the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.process(path, callback)&lt;/code&gt;, which takes in the path to the image file and a callback.&lt;/p&gt;
 
 &lt;p&gt;Here is an example from the documentation:&lt;/p&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;tesseract.process(__dirname + &#39;/path/to/image.jpg&#39;,function(err, text) {
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;tesseract.process(__dirname + &apos;/path/to/image.jpg&apos;,function(err, text) {
   if(err) {
     console.error(err);
   } else {
     console.log(text);
   }
 });
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
 &lt;p&gt;As you can see, the implementation of the engine is quite simple depending on the usage and the need of a precise character recognition.&lt;/p&gt;
 
@@ -59,19 +789,19 @@ Without specifying a language code, by default it will only install the package 
 
 &lt;p&gt;Here is the result that I got&lt;/p&gt;
 
-&lt;p&gt;&lt;a href=&quot;http://imgur.com/pNOqQGk&quot;&gt;&lt;img src=&quot;http://i.imgur.com/pNOqQGk.jpg&quot; title=&quot;source: imgur.com&quot; /&gt;&lt;/a&gt;
-&lt;a href=&quot;http://imgur.com/7wzyvBA&quot;&gt;&lt;img src=&quot;http://i.imgur.com/7wzyvBA.png&quot; title=&quot;source: imgur.com&quot; /&gt;&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img src=&quot;/images/tesseract.jpg&quot; alt=&quot;Tesseract OCR example image&quot; /&gt;
+&lt;img src=&quot;/images/tesseract2.png&quot; alt=&quot;Tesseract OCR output example&quot; /&gt;&lt;/p&gt;
 </description>
         <pubDate>Tue, 09 Feb 2016 00:00:00 -0800</pubDate>
-        <link>http://dkim1116.github.io//2016/02/09/tesseract.html</link>
-        <guid isPermaLink="true">http://dkim1116.github.io//2016/02/09/tesseract.html</guid>
+        <link>http://localhost:4000/2016/02/09/tesseract.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2016/02/09/tesseract.html</guid>
         
         
       </item>
     
       <item>
-        <title>Bcrypt</title>
-        <description>&lt;p&gt;&lt;a href=&quot;http://imgur.com/apGs9hk&quot;&gt;&lt;img src=&quot;http://i.imgur.com/apGs9hk.jpg&quot; title=&quot;source: imgur.com&quot; /&gt;&lt;/a&gt;&lt;/p&gt;
+        <title>Using Bcrypt with Node.js</title>
+        <description>&lt;p&gt;&lt;img src=&quot;/images/bcrypt.jpg&quot; alt=&quot;Bcrypt illustration&quot; /&gt;&lt;/p&gt;
 
 &lt;p&gt;This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js
 Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.&lt;/p&gt;
@@ -88,37 +818,36 @@ Since the genesis of the internet, salting and hashing an important piece of inf
 Implementing ‘Q’ with bcrypt turned out to be quite simple.
 First, you install the module using&lt;/p&gt;
 
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;npm install Q&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;npm install Q&lt;/code&gt;&lt;/p&gt;
 
 &lt;p&gt;Secondly, you declare a salt-factor, which will be used when generating salt. Higher the number, the larger the salt will be.&lt;/p&gt;
 
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var salt_factor = 10;&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var salt_factor = 10;&lt;/code&gt;&lt;/p&gt;
 
 &lt;p&gt;Then you require the module where the insertion/query is made, by doing&lt;/p&gt;
 
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var Q = require(&#39;q&#39;);&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var Q = require(&apos;q&apos;);&lt;/code&gt;&lt;/p&gt;
 
 &lt;h5&gt;Creating a new user&lt;/h5&gt;
 &lt;p&gt;When you are inserting a user’s credentials, before salting and hashing takes place, you declare a variable that will handle the deferment.&lt;/p&gt;
 
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;var defer = Q.defer();&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var defer = Q.defer();&lt;/code&gt;&lt;/p&gt;
 
 &lt;p&gt;After that, you salt and hash the user’s password by following the example from the bcrypt documentation.&lt;/p&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var bcrypt = require(&#39;bcrypt&#39;);
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var bcrypt = require(&apos;bcrypt&apos;);
 bcrypt.genSalt(10, function(err, salt) {
-    bcrypt.hash(&#39;B4c0/\/&#39;, salt, function(err, hash) {
+    bcrypt.hash(&apos;B4c0/\/&apos;, salt, function(err, hash) {
         // Store hash in your password DB.
     });
 });
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;The issue that I faced while following the example was that I the function itself, could not be used with a &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; or a return statement.&lt;/p&gt;
+&lt;p&gt;The issue that I faced while following the example was that I the function itself, could not be used with a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then()&lt;/code&gt; or a return statement.&lt;/p&gt;
 
-&lt;h5&gt;Here&#39;s my implementation of creating a user&lt;/h5&gt;
+&lt;h5&gt;Here&apos;s my implementation of creating a user&lt;/h5&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.createUser = function(obj) {
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.createUser = function(obj) {
     var defer = Q.defer();
     Bcrypt.genSalt(Salt_Factor, function(err, salt) {
         if (err) {
@@ -141,17 +870,16 @@ bcrypt.genSalt(10, function(err, salt) {
     });
     return defer.promise;
 };
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;h5&gt;Checking a user&#39;s password&lt;/h5&gt;
-&lt;p&gt;Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the &lt;code class=&quot;highlighter-rouge&quot;&gt;.compare&lt;/code&gt; method instead of the &lt;code class=&quot;highlighter-rouge&quot;&gt;.genSalt&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;.hash&lt;/code&gt;.&lt;/p&gt;
+&lt;h5&gt;Checking a user&apos;s password&lt;/h5&gt;
+&lt;p&gt;Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.compare&lt;/code&gt; method instead of the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.genSalt&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.hash&lt;/code&gt;.&lt;/p&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.findUser = function(obj) {
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.findUser = function(obj) {
     var defer = Q.defer();
     User.find({ username: obj.username }).then(function(user, err) { //query method for Mongoose
         if (err) {
-            console.log(&#39;unable to find user!!&#39;, err);
+            console.log(&apos;unable to find user!!&apos;, err);
         } else {
             Bcrypt.compare(obj.password, user[0].password, function(err, result) {
                 if (err) {
@@ -164,14 +892,13 @@ bcrypt.genSalt(10, function(err, salt) {
     });
     return defer.promise;
 };
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the &lt;code class=&quot;highlighter-rouge&quot;&gt;.then()&lt;/code&gt; promise can be utilized.&lt;/p&gt;
+&lt;p&gt;Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then()&lt;/code&gt; promise can be utilized.&lt;/p&gt;
 
 &lt;h5&gt;Example of a request handler using express&lt;/h5&gt;
 
-&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;app.post(&#39;/createUser&#39;, function(req, res, next) {
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;app.post(&apos;/createUser&apos;, function(req, res, next) {
     db.createUser(req.body).then(function(user, err) {
         if (err) {
             res.status(406);
@@ -180,19 +907,18 @@ bcrypt.genSalt(10, function(err, salt) {
         }
     });
 });
-&lt;/code&gt;&lt;/pre&gt;
-&lt;/div&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 </description>
         <pubDate>Thu, 21 Jan 2016 00:00:00 -0800</pubDate>
-        <link>http://dkim1116.github.io//2016/01/21/bcrypt.html</link>
-        <guid isPermaLink="true">http://dkim1116.github.io//2016/01/21/bcrypt.html</guid>
+        <link>http://localhost:4000/2016/01/21/bcrypt.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2016/01/21/bcrypt.html</guid>
         
         
       </item>
     
       <item>
-        <title>Bestpractices</title>
-        <description>&lt;p&gt;&lt;a href=&quot;http://imgur.com/67jXDCW&quot;&gt;&lt;img src=&quot;http://i.imgur.com/67jXDCW.jpg&quot; title=&quot;source: imgur.com&quot; /&gt;&lt;/a&gt;&lt;/p&gt;
+        <title>Coding Best Practices</title>
+        <description>&lt;p&gt;&lt;img src=&quot;/images/CodingBestPractices.jpg&quot; alt=&quot;Coding best practices cover image&quot; /&gt;&lt;/p&gt;
 
 &lt;h3&gt;Coding Best Practices&lt;/h3&gt;
 &lt;p&gt;-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.&lt;/p&gt;
@@ -216,8 +942,8 @@ bcrypt.genSalt(10, function(err, salt) {
 &lt;p&gt;-“Always be humble and be ready to learn. This is a rapidly advancing field, if you start to think that you know everything, you’ll fall behind everyone else in no time.”     (Laurie Voss CTO at NPM http://sel.do)&lt;/p&gt;
 </description>
         <pubDate>Fri, 11 Dec 2015 00:00:00 -0800</pubDate>
-        <link>http://dkim1116.github.io//2015/12/11/bestPractices.html</link>
-        <guid isPermaLink="true">http://dkim1116.github.io//2015/12/11/bestPractices.html</guid>
+        <link>http://localhost:4000/2015/12/11/bestPractices.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2015/12/11/bestPractices.html</guid>
         
         
       </item>

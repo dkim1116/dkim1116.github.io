@@ -2,16 +2,18 @@
 # Only the main Sass file needs front matter (the dashes are enough)
 ---
 @charset "utf-8";
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap");
 
-$surface-color: #fffdfa;
-$surface-muted: #f5efe4;
-$border-color: #d7cbbb;
-$text-strong: #1f2933;
-$text-muted: #52606d;
-$accent-color: #b45309;
-$accent-dark: #7c2d12;
-$shadow-soft: 0 18px 45px rgba(31, 41, 51, 0.08);
-$content-width: 800px;
+$background-color: #f7f8fa;
+$surface-color: #ffffff;
+$surface-muted: #f3f4f6;
+$border-color: #d9dee5;
+$text-strong: #111827;
+$text-muted: #4b5563;
+$accent-color: #0f766e;
+$accent-soft: rgba(15, 118, 110, 0.08);
+$shadow-soft: 0 10px 30px rgba(17, 24, 39, 0.04);
+$content-width: 760px;
 $on-palm: 700px;
 
 @mixin media-query($device) {
@@ -33,14 +35,32 @@ html {
 	scroll-behavior: smooth;
 }
 
+body,
+button,
+input,
+textarea {
+	font-family: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.title {
+	font-family: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+	letter-spacing: -0.03em;
+}
+
 .navigation {
-	min-height: 5.8rem;
+	min-height: 5.6rem;
 	position: fixed;
 	top: 0;
 	width: 100%;
-	background: rgba(255, 253, 250, 0.94);
-	backdrop-filter: blur(14px);
-	border-bottom: 1px solid rgba(124, 45, 18, 0.12);
+	background: rgba(247, 248, 250, 0.92);
+	backdrop-filter: blur(10px);
+	border-bottom: 1px solid $border-color;
 	z-index: 20;
 
 	.container {
@@ -56,11 +76,13 @@ html {
 	.title {
 		color: $text-strong;
 		display: block;
-		font-size: 1.8rem;
-		font-weight: 700;
+		font-family: "IBM Plex Mono", monospace;
+		font-size: 1.6rem;
+		font-weight: 600;
 		letter-spacing: 0.02em;
 		line-height: 1.2;
 		margin: 0;
+		text-transform: lowercase;
 	}
 
 	.navigation-title {
@@ -82,39 +104,45 @@ html {
 
 	.navigation-link {
 		color: $text-muted;
-		font-size: 1.5rem;
-		font-weight: 600;
+		font-family: "IBM Plex Mono", monospace;
+		font-size: 1.3rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
 		text-decoration: none;
+		text-transform: lowercase;
 	}
 
 	.navigation-link:hover,
 	.navigation-link:focus,
 	.navigation-title:hover .title,
 	.navigation-title:focus .title {
-		color: $accent-dark;
+		color: $accent-color;
 	}
 }
 
 body {
-	background:
-		radial-gradient(circle at top left, rgba(180, 83, 9, 0.12), transparent 24rem),
-		linear-gradient(180deg, #fffaf2 0%, $surface-color 38%, #fff 100%);
+	background: $background-color;
 	color: $text-strong;
+	font-size: 1.7rem;
+	line-height: 1.7;
 	margin: 0;
 	min-height: 100vh;
 }
 
 a {
-	color: $accent-dark;
+	color: $accent-color;
+	text-decoration-thickness: 0.14rem;
+	text-underline-offset: 0.2rem;
 }
 
 a:hover,
 a:focus {
-	color: $accent-color;
+	color: $text-strong;
 }
 
 img {
-	border-radius: 1.2rem;
+	border: 1px solid $border-color;
+	border-radius: 0.8rem;
 	box-shadow: $shadow-soft;
 	display: block;
 	height: auto;
@@ -136,16 +164,16 @@ img {
 .home,
 .post,
 .site-footer .wrapper {
-	background: rgba(255, 255, 255, 0.78);
-	border: 1px solid rgba(215, 203, 187, 0.7);
-	border-radius: 2rem;
+	background: $surface-color;
+	border: 1px solid $border-color;
+	border-radius: 1.2rem;
 	box-shadow: $shadow-soft;
 }
 
 .home,
 .post {
 	margin-bottom: 3rem;
-	padding: 3.2rem;
+	padding: 2.8rem;
 }
 
 .post-header {
@@ -153,14 +181,35 @@ img {
 }
 
 .post-title {
+	font-size: clamp(2.8rem, 4vw, 3.8rem);
+	line-height: 1.15;
 	margin-bottom: 0.8rem;
 }
 
 .post-meta {
 	color: $text-muted;
-	font-size: 1.4rem;
+	font-family: "IBM Plex Mono", monospace;
+	font-size: 1.2rem;
+	font-weight: 500;
 	letter-spacing: 0.03em;
 	text-transform: uppercase;
+}
+
+.post-content h2,
+.post-content h3,
+.post-content h4,
+.post-content h5,
+.post-content h6 {
+	line-height: 1.2;
+	margin-top: 3.2rem;
+}
+
+.post-content h2 {
+	font-size: 2.8rem;
+}
+
+.post-content h3 {
+	font-size: 2.2rem;
 }
 
 .post-content > *:last-child {
@@ -173,11 +222,35 @@ img {
 }
 
 .post-content pre {
+	background: #0f172a;
+	border-radius: 1rem;
+	box-shadow: none;
+	color: #e5eef7;
 	overflow-x: auto;
+	padding: 1.6rem;
 }
 
 .post-content code {
 	white-space: pre-wrap;
+}
+
+.post-content :not(pre) > code {
+	background: $surface-muted;
+	border-radius: 0.4rem;
+	font-family: "IBM Plex Mono", monospace;
+	font-size: 0.9em;
+	padding: 0.2rem 0.45rem;
+}
+
+.post-content ul,
+.post-content ol {
+	padding-left: 2.4rem;
+}
+
+.post-content hr {
+	border: 0;
+	border-top: 1px solid $border-color;
+	margin: 3.2rem 0;
 }
 
 .site-footer {
@@ -187,13 +260,13 @@ img {
 	.wrapper {
 		margin: 0 auto;
 		max-width: $content-width;
-		padding: 3.2rem;
+		padding: 2.4rem 2.8rem;
 		width: 100%;
 	}
 
 	.footer-heading {
-		font-size: 2rem;
-		margin-bottom: 1rem;
+		font-size: 1.7rem;
+		margin-bottom: 0.8rem;
 	}
 }
 
@@ -208,14 +281,29 @@ img {
 	padding: 0;
 
 	li {
-		border-top: 1px solid rgba(215, 203, 187, 0.8);
-		padding: 2rem 0;
+		border-bottom: 1px solid $border-color;
+		margin-bottom: 0;
+		padding: 1.8rem 0;
 	}
+}
 
-	li:first-child {
-		border-top: 0;
-		padding-top: 0;
-	}
+.post-list li:first-child {
+	padding-top: 0;
+}
+
+.post-list li:last-child {
+	border-bottom: 0;
+	padding-bottom: 0;
+}
+
+.post-list h2 {
+	font-size: 2.4rem;
+	margin-bottom: 0;
+}
+
+.post-list .post-meta {
+	display: inline-block;
+	margin-bottom: 0.8rem;
 }
 
 .post-link {
@@ -225,11 +313,11 @@ img {
 
 .post-link:hover,
 .post-link:focus {
-	color: $accent-dark;
+	color: $accent-color;
 }
 
 .rss-subscribe {
-	border-top: 1px solid rgba(215, 203, 187, 0.8);
+	border-top: 1px solid $border-color;
 	margin-top: 2rem;
 	padding-top: 2rem;
 }
@@ -275,7 +363,8 @@ img {
 blockquote {
 	background: $surface-muted;
 	border-left-color: $accent-color;
-	border-radius: 0 1.2rem 1.2rem 0;
+	border-radius: 0 0.8rem 0.8rem 0;
+	font-style: normal;
 }
 
 @include media-query($on-palm) {
@@ -291,7 +380,15 @@ blockquote {
 	.home,
 	.post,
 	.site-footer .wrapper {
-		border-radius: 1.4rem;
+		border-radius: 1rem;
 		padding: 2.2rem;
+	}
+
+	.post-list h2 {
+		font-size: 2.2rem;
+	}
+
+	.post-title {
+		font-size: 3rem;
 	}
 }
