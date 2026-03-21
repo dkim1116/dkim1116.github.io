@@ -4,7 +4,7 @@ title: "Designing a URL Shortener System"
 ---
 This is my attempt at thinking through a URL shortener system like Bit.ly.
 
-At first this one felt much simpler than something like Yelp, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.
+At first this one felt simple, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.
 
 The parts I kept coming back to were:
 
@@ -24,8 +24,8 @@ These are basically my notes on how I’d reason through it right now.
 * Shorten a long URL
 * Redirect from short URL to original URL
 * Optional:
-* custom alias
-* expiration date
+  * custom alias
+  * expiration date
 
 ### Non-Functional
 
@@ -33,8 +33,8 @@ These are basically my notes on how I’d reason through it right now.
 * High availability over strict consistency
 * Uniqueness of short URLs
 * Scale to:
-* ~1B URLs
-* ~100M DAU
+  * ~1B URLs
+  * ~100M DAU
 
 ---
 
@@ -320,9 +320,9 @@ This is one of those designs where I’m very intentionally accepting some compl
 * Read-heavy systems = optimize caching first
 * ID generation is a real problem at scale
 * Simple systems get complicated when you add:
-* scale
-* availability
-* latency constraints
+  * scale
+  * availability
+  * latency constraints
 
 ---
 

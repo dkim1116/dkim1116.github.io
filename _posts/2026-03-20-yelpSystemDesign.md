@@ -40,8 +40,8 @@ The biggest thing that shaped my design was realizing that search and writes hav
 
 So in my head I split the system into two paths:
 
-- search (read-heavy, low latency)
-- writes (business + reviews)
+* search (read-heavy, low latency)
+* writes (business + reviews)
 
 For search, I want low latency and flexible querying, so I’d send those requests to Elasticsearch.
 
@@ -55,13 +55,14 @@ The event bus and indexer are basically just there so I can keep Elasticsearch i
 ---
 
 ## 🔍 Search Flow
+
 <img src="{{ '/images/yelp-search-flow.png' | relative_url }}" alt="Yelp-like system search flow">
 
 When I first thought about this, I assumed I’d just query the database.
 
 But for something like:
-- “ramen near me”
-- “best sushi in SF”
+* “ramen near me”
+* “best sushi in SF”
 
 that gets messy fast.
 
@@ -70,10 +71,10 @@ That is the point where this stopped feeling like a normal CRUD-style database p
 So instead, I’d have the request go through a Search Service and then straight to Elasticsearch.
 
 Elasticsearch handles:
-- text matching (ramen, sushi, etc.)
-- filtering (category)
-- geo queries (distance)
-- ranking
+* text matching (ramen, sushi, etc.)
+* filtering (category)
+* geo queries (distance)
+* ranking
 
 and returns the best results.
 
@@ -267,7 +268,7 @@ I’m still learning, but this one helped me understand why search-heavy systems
 
 * Redis caching for hot queries
 * better ranking:
-* distance + rating + popularity
+  * distance + rating + popularity
 * cursor-based pagination
 * sharding for scale
 

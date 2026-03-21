@@ -6,8 +6,8 @@
 </description>
     <link>http://localhost:4000/</link>
     <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 20 Mar 2026 17:49:10 -0700</pubDate>
-    <lastBuildDate>Fri, 20 Mar 2026 17:49:10 -0700</lastBuildDate>
+    <pubDate>Fri, 20 Mar 2026 18:19:35 -0700</pubDate>
+    <lastBuildDate>Fri, 20 Mar 2026 18:19:35 -0700</lastBuildDate>
     <generator>Jekyll v4.4.1</generator>
     
       <item>
@@ -74,6 +74,7 @@
 &lt;hr /&gt;
 
 &lt;h2 id=&quot;-search-flow&quot;&gt;🔍 Search Flow&lt;/h2&gt;
+
 &lt;p&gt;&lt;img src=&quot;/images/yelp-search-flow.png&quot; alt=&quot;Yelp-like system search flow&quot; /&gt;&lt;/p&gt;
 
 &lt;p&gt;When I first thought about this, I assumed I’d just query the database.&lt;/p&gt;
@@ -321,8 +322,11 @@ avgRating = ratingSum / reviewCount
 
 &lt;ul&gt;
   &lt;li&gt;Redis caching for hot queries&lt;/li&gt;
-  &lt;li&gt;better ranking:&lt;/li&gt;
-  &lt;li&gt;distance + rating + popularity&lt;/li&gt;
+  &lt;li&gt;better ranking:
+    &lt;ul&gt;
+      &lt;li&gt;distance + rating + popularity&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
   &lt;li&gt;cursor-based pagination&lt;/li&gt;
   &lt;li&gt;sharding for scale&lt;/li&gt;
 &lt;/ul&gt;
@@ -337,10 +341,637 @@ avgRating = ratingSum / reviewCount
       </item>
     
       <item>
+        <title>Designing a Distributed Cache System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a distributed cache system.&lt;/p&gt;
+
+&lt;p&gt;At first this one seemed simpler than some of the other system design problems because the API is tiny. It is basically just &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SET&lt;/code&gt;, and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DELETE&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;But once I started layering in things like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;TTL&lt;/li&gt;
+  &lt;li&gt;eviction&lt;/li&gt;
+  &lt;li&gt;failover&lt;/li&gt;
+  &lt;li&gt;sharding&lt;/li&gt;
+  &lt;li&gt;1TB of data&lt;/li&gt;
+  &lt;li&gt;100k requests/sec&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;it stopped feeling simple pretty quickly.&lt;/p&gt;
+
+&lt;p&gt;These are basically my notes on how I’d reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;requirements&quot;&gt;Requirements&lt;/h2&gt;
+
+&lt;h3 id=&quot;non-functional&quot;&gt;Non-functional&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Handle up to &lt;strong&gt;1TB of data&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;Handle around &lt;strong&gt;100k requests/sec&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Availability &amp;gt; Consistency&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;Low latency for both &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SET&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;core-entities&quot;&gt;Core Entities&lt;/h2&gt;
+
+&lt;p&gt;The core data is pretty minimal:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;key&lt;/li&gt;
+  &lt;li&gt;value&lt;/li&gt;
+  &lt;li&gt;TTL&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;api&quot;&gt;API&lt;/h2&gt;
+
+&lt;h3 id=&quot;set-value&quot;&gt;Set value&lt;/h3&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;err&quot;&gt;POST /:key
+{
+  &quot;value&quot;: &quot;...&quot;,
+  &quot;ttl&quot;: 300
+}
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;get-value&quot;&gt;Get value&lt;/h3&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;err&quot;&gt;GET /:key
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;delete-value&quot;&gt;Delete value&lt;/h3&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;err&quot;&gt;DELETE /:key
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;starting-simple-single-node-cache&quot;&gt;Starting Simple: Single-Node Cache&lt;/h2&gt;
+
+&lt;p&gt;If I ignore distribution for a second, the cache is basically:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;a hash map for fast lookup&lt;/li&gt;
+  &lt;li&gt;TTL metadata attached to each entry&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;basic-idea&quot;&gt;Basic idea&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SET&lt;/code&gt; stores &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;key -&amp;gt; value&lt;/code&gt; in the hash map&lt;/li&gt;
+  &lt;li&gt;if TTL exists, store &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;expiresAt = now + ttl&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET&lt;/code&gt; checks:
+    &lt;ul&gt;
+      &lt;li&gt;does the key exist?&lt;/li&gt;
+      &lt;li&gt;if yes, is it expired?&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;if expired, delete it and return a miss&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DELETE&lt;/code&gt; just removes it&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Nothing fancy yet.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;ttl-design&quot;&gt;TTL Design&lt;/h2&gt;
+
+&lt;p&gt;At first I thought:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just check expiration on every &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET&lt;/code&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That works, but it is not enough.&lt;/p&gt;
+
+&lt;p&gt;The problem is that if a key expires and nobody reads it again, it just sits there forever.&lt;/p&gt;
+
+&lt;p&gt;So I’d do both:&lt;/p&gt;
+
+&lt;h3 id=&quot;1-lazy-expiration&quot;&gt;1. Lazy expiration&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;if expired, delete it immediately&lt;/li&gt;
+  &lt;li&gt;return a miss&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;2-background-cleanup&quot;&gt;2. Background cleanup&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;periodically scan part of the cache&lt;/li&gt;
+  &lt;li&gt;remove expired keys&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This way:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;hot keys get cleaned up quickly&lt;/li&gt;
+  &lt;li&gt;cold keys still eventually get removed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;adding-lru-eviction&quot;&gt;Adding LRU Eviction&lt;/h2&gt;
+
+&lt;p&gt;If memory is limited, we also need a policy for what to evict.&lt;/p&gt;
+
+&lt;p&gt;I’d start with &lt;strong&gt;LRU (Least Recently Used)&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;data-structures&quot;&gt;Data structures&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;hash map for fast lookup&lt;/li&gt;
+  &lt;li&gt;doubly linked list for usage order&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;how-it-works&quot;&gt;How it works&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;every time a key is used, move it to the front&lt;/li&gt;
+  &lt;li&gt;least recently used items drift toward the tail&lt;/li&gt;
+  &lt;li&gt;when memory is full, evict from the tail&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So the map tells me where the data is, and the list tells me what should get removed.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-distributed-design&quot;&gt;High-Level Distributed Design&lt;/h2&gt;
+
+&lt;p&gt;A single node will not handle 1TB or 100k requests/sec.&lt;/p&gt;
+
+&lt;p&gt;So I’d split the cache into multiple shards.&lt;/p&gt;
+
+&lt;p&gt;Each shard:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;owns part of the keyspace&lt;/li&gt;
+  &lt;li&gt;has replicas for failover&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The next question becomes:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;how do I know which shard a key belongs to?&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;I’d use &lt;strong&gt;consistent hashing&lt;/strong&gt; for that.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;scaling-the-cache&quot;&gt;Scaling the Cache&lt;/h2&gt;
+
+&lt;p&gt;To scale this system:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;add more cache nodes&lt;/li&gt;
+  &lt;li&gt;shard keys using consistent hashing&lt;/li&gt;
+  &lt;li&gt;replicate each shard&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Consistent hashing matters because if I just used:&lt;/p&gt;
+
+&lt;div class=&quot;language-text highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;hash(key) % N
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;then adding one node would reshuffle almost everything.&lt;/p&gt;
+
+&lt;p&gt;With consistent hashing:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;only part of the keyspace moves&lt;/li&gt;
+  &lt;li&gt;scaling becomes a lot less disruptive&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;replication-and-availability&quot;&gt;Replication and Availability&lt;/h2&gt;
+
+&lt;p&gt;Since availability matters more than strict consistency here:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;each shard has a primary&lt;/li&gt;
+  &lt;li&gt;replicas get updated asynchronously&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That means:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;writes stay fast&lt;/li&gt;
+  &lt;li&gt;replicas may lag a little&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For a cache, that tradeoff feels reasonable to me.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-happens-if-a-node-goes-down&quot;&gt;What Happens If a Node Goes Down?&lt;/h2&gt;
+
+&lt;p&gt;If a primary goes down, the system needs to:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;detect the failure&lt;/li&gt;
+  &lt;li&gt;check the replicas&lt;/li&gt;
+  &lt;li&gt;promote one replica to primary&lt;/li&gt;
+  &lt;li&gt;point traffic at the new primary&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;So the rough flow is:&lt;/p&gt;
+
+&lt;div class=&quot;language-text highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;detect -&amp;gt; promote -&amp;gt; reroute
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;keeping-latency-low&quot;&gt;Keeping Latency Low&lt;/h2&gt;
+
+&lt;p&gt;For a cache, latency is the whole point.&lt;/p&gt;
+
+&lt;p&gt;The things I’d pay attention to are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;keep the cache close to the application servers&lt;/li&gt;
+  &lt;li&gt;reuse connections&lt;/li&gt;
+  &lt;li&gt;minimize extra network hops&lt;/li&gt;
+  &lt;li&gt;keep the hot path fully in memory&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;If the cache itself is slow, the entire system feels slow.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;rebalancing-when-adding-a-new-node&quot;&gt;Rebalancing When Adding a New Node&lt;/h2&gt;
+
+&lt;p&gt;When adding a new shard:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;consistent hashing determines which keys should move&lt;/li&gt;
+  &lt;li&gt;existing nodes start copying that data to the new node&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;During migration:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;some requests may still hit the old node&lt;/li&gt;
+  &lt;li&gt;the system may need fallback logic while data is still moving&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;After migration:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;traffic fully shifts to the new node&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I would not block reads and writes during migration. That would defeat the point.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;how-ttl-and-lru-work-together&quot;&gt;How TTL and LRU Work Together&lt;/h2&gt;
+
+&lt;p&gt;TTL and LRU solve different problems:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;TTL removes data that is no longer valid&lt;/li&gt;
+  &lt;li&gt;LRU removes data when memory is full&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So in my head:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;expired keys should be removed first&lt;/li&gt;
+  &lt;li&gt;then LRU eviction kicks in if memory pressure still exists&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;This design gives:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;low latency&lt;/li&gt;
+  &lt;li&gt;horizontal scalability&lt;/li&gt;
+  &lt;li&gt;good availability&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But the tradeoffs are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;async replication can cause stale reads&lt;/li&gt;
+  &lt;li&gt;failover is not instant&lt;/li&gt;
+  &lt;li&gt;rebalancing adds operational complexity&lt;/li&gt;
+  &lt;li&gt;TTL and eviction both add overhead&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-i-learned&quot;&gt;What I Learned&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;TTL needs both lazy cleanup and background cleanup&lt;/li&gt;
+  &lt;li&gt;eviction policy is only part of the story, the data structures matter too&lt;/li&gt;
+  &lt;li&gt;scaling mostly becomes a sharding and routing problem&lt;/li&gt;
+  &lt;li&gt;failover is more than just adding replicas&lt;/li&gt;
+  &lt;li&gt;rebalancing is harder than it looks at first&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This problem looks simple on the surface, but once you start thinking about scale and failure cases, it gets interesting fast.&lt;/p&gt;
+
+&lt;p&gt;It was a good reminder for me that even something as basic as a cache turns into a real distributed systems problem once you treat it like production infrastructure.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;future-improvements&quot;&gt;Future Improvements&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;compare LFU vs LRU more deeply&lt;/li&gt;
+  &lt;li&gt;hot key detection&lt;/li&gt;
+  &lt;li&gt;multi-region cache design&lt;/li&gt;
+  &lt;li&gt;persistence / warm restart&lt;/li&gt;
+  &lt;li&gt;write-through vs write-back&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Sat, 25 Oct 2025 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2025/10/25/distributedCache.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2025/10/25/distributedCache.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Designing a Rate Limiter System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a distributed rate limiter.&lt;/p&gt;
+
+&lt;p&gt;At first this problem looked pretty simple, but once I started thinking about scale, shared state, and latency, it got a lot more interesting.&lt;/p&gt;
+
+&lt;p&gt;These are basically my notes on how I’d reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-requirements&quot;&gt;🧠 Requirements&lt;/h2&gt;
+
+&lt;h3 id=&quot;non-functional&quot;&gt;Non-Functional&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Availability &amp;gt; Consistency&lt;/li&gt;
+  &lt;li&gt;Low latency (~&amp;lt;10ms per request)&lt;/li&gt;
+  &lt;li&gt;Handle ~1M requests/sec across ~10M daily active users&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-core-entities&quot;&gt;🧱 Core Entities&lt;/h2&gt;
+
+&lt;p&gt;The main pieces I care about are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;client identity (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt;, API key, IP, etc.)&lt;/li&gt;
+  &lt;li&gt;request&lt;/li&gt;
+  &lt;li&gt;rate limit policy&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-interface&quot;&gt;🔌 Interface&lt;/h2&gt;
+
+&lt;p&gt;The rate limiter really just answers one question:&lt;/p&gt;
+
+&lt;p&gt;👉 “Can this request go through or not?”&lt;/p&gt;
+
+&lt;div class=&quot;language-ts highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nf&quot;&gt;checkRequest&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;clientId&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;ruleInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;na&quot;&gt;isAllowed&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;boolean&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+  &lt;span class=&quot;na&quot;&gt;remaining&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kr&quot;&gt;number&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+  &lt;span class=&quot;na&quot;&gt;resetTime&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;timestamp&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-high-level-design&quot;&gt;🏗️ High-Level Design&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/rate-limiter-architecture.png&quot; alt=&quot;rate limiter high-level architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The main thing I care about here is rejecting requests as early as possible.&lt;/p&gt;
+
+&lt;p&gt;So instead of putting rate limiting inside each service, I put it at the API Gateway layer.&lt;/p&gt;
+
+&lt;p&gt;That way:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;requests get blocked before hitting backend services&lt;/li&gt;
+  &lt;li&gt;I don’t waste compute on requests I already know I’ll reject&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The first real problem I ran into was this:&lt;/p&gt;
+
+&lt;p&gt;👉 multiple API Gateway instances need to share the same rate limit state&lt;/p&gt;
+
+&lt;p&gt;That’s where Redis comes in.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;️-rate-limiting-algorithm&quot;&gt;⚙️ Rate Limiting Algorithm&lt;/h2&gt;
+
+&lt;p&gt;I initially thought:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just store request count in a hashmap per user&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That works at a very basic level, but I don’t really like it for a real system because it feels too rigid and it does not handle bursts very gracefully.&lt;/p&gt;
+
+&lt;p&gt;What made more sense to me was Token Bucket.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/token-bucket.png&quot; alt=&quot;rate limiter token bucket diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Each user gets:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;a bucket of tokens&lt;/li&gt;
+  &lt;li&gt;each request consumes 1 token&lt;/li&gt;
+  &lt;li&gt;tokens refill over time&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So the mental model is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;if there are tokens, allow the request&lt;/li&gt;
+  &lt;li&gt;if there are no tokens, reject it&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I like it because it is simple enough to explain, but still handles bursts better than a rigid counter-based approach.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;allows bursts (good UX)&lt;/li&gt;
+  &lt;li&gt;smooth rate limiting over time&lt;/li&gt;
+  &lt;li&gt;easy to reason about&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-where-state-lives-important&quot;&gt;🧠 Where state lives (important)&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/rate-state.png&quot; alt=&quot;rate limiter rate state diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;This part matters a lot more than the algorithm itself.&lt;/p&gt;
+
+&lt;p&gt;If each gateway kept its own counters, rate limiting would break pretty quickly because the same client could just bounce across instances.&lt;/p&gt;
+
+&lt;p&gt;So the state needs to be shared.&lt;/p&gt;
+
+&lt;p&gt;That is why I’d keep the rate limit state in Redis and have all gateways read and update the same source of truth.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-scaling-to-1m-rps&quot;&gt;🚀 Scaling to 1M RPS&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/rate-scaling.png&quot; alt=&quot;rate limiter rate scaling diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;To scale this, I’d keep as much of the system stateless as possible:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;horizontally scale API Gateway&lt;/li&gt;
+  &lt;li&gt;horizontally scale Redis (Redis Cluster)&lt;/li&gt;
+  &lt;li&gt;keep everything stateless except Redis&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-keeping-latency-low&quot;&gt;⚡ Keeping Latency Low&lt;/h2&gt;
+
+&lt;p&gt;This part matters a lot.&lt;/p&gt;
+
+&lt;p&gt;If rate limiting gets slow, then every request gets slow.&lt;/p&gt;
+
+&lt;p&gt;So the things I’d pay attention to are:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Keep API Gateway and Redis in same region&lt;/li&gt;
+  &lt;li&gt;Use persistent connections (no reconnect per request)&lt;/li&gt;
+  &lt;li&gt;Avoid extra hops (no unnecessary services in between)&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The whole point is that this check should be extremely cheap.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-what-happens-if-redis-fails&quot;&gt;🚨 What happens if Redis fails?&lt;/h2&gt;
+
+&lt;p&gt;This is where tradeoffs come in.&lt;/p&gt;
+
+&lt;h3 id=&quot;option-1-fail-open&quot;&gt;Option 1: Fail Open&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;allow all requests&lt;/li&gt;
+  &lt;li&gt;better availability&lt;/li&gt;
+  &lt;li&gt;risk: abuse / overload&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;option-2-fail-closed&quot;&gt;Option 2: Fail Closed&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;block all requests&lt;/li&gt;
+  &lt;li&gt;safer for critical systems&lt;/li&gt;
+  &lt;li&gt;worse user experience&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;My take is that it depends on the kind of system:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;banking / payments → fail closed&lt;/li&gt;
+  &lt;li&gt;general APIs → probably fail open&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Either way, Redis ends up being critical infrastructure here, so I’d still want to reduce the chance of failure as much as possible.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use Redis Cluster / replicas&lt;/li&gt;
+  &lt;li&gt;automatic failover&lt;/li&gt;
+  &lt;li&gt;avoid single point of failure&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-handling-overload--slow-redis&quot;&gt;🧊 Handling Overload / Slow Redis&lt;/h2&gt;
+
+&lt;p&gt;If Redis becomes slow or unavailable:&lt;/p&gt;
+
+&lt;p&gt;👉 API Gateway should start rejecting requests early&lt;/p&gt;
+
+&lt;p&gt;Otherwise:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;requests pile up&lt;/li&gt;
+  &lt;li&gt;system gets overwhelmed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I’d rather degrade early than let the whole system get dragged down.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-dynamic-rule-updates&quot;&gt;🔄 Dynamic Rule Updates&lt;/h2&gt;
+
+&lt;p&gt;Rate limits can change, so there has to be some way to update rules without redeploying everything.&lt;/p&gt;
+
+&lt;p&gt;The two options I was thinking through were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;polling&lt;/li&gt;
+  &lt;li&gt;push&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Polling is simpler. Gateways can periodically ask for the latest rules.&lt;/p&gt;
+
+&lt;p&gt;Push is faster, but adds more moving parts.&lt;/p&gt;
+
+&lt;p&gt;If I were building this from scratch, I’d probably start with polling because it is easier to reason about, then move to push later if the delay becomes a real problem.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-final-thoughts&quot;&gt;📌 Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This problem made me realize that the hard part is not really the algorithm itself.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;state sharing is the hardest part (not the algorithm)&lt;/li&gt;
+  &lt;li&gt;Redis becomes critical infrastructure&lt;/li&gt;
+  &lt;li&gt;small latency here affects every request in the system&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;👉 rate limiting is one of those things that looks simple until you try to scale it&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;-future-improvements&quot;&gt;🚀 Future Improvements&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;per-endpoint rate limiting&lt;/li&gt;
+  &lt;li&gt;adaptive limits based on traffic&lt;/li&gt;
+  &lt;li&gt;analytics on rate-limited requests&lt;/li&gt;
+  &lt;li&gt;multi-region support&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Tue, 12 Nov 2024 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2024/11/12/rateLimiterDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2024/11/12/rateLimiterDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
         <title>Designing a URL Shortener System</title>
         <description>&lt;p&gt;This is my attempt at thinking through a URL shortener system like Bit.ly.&lt;/p&gt;
 
-&lt;p&gt;At first this one felt much simpler than something like Yelp, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.&lt;/p&gt;
+&lt;p&gt;At first this one felt simple, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.&lt;/p&gt;
 
 &lt;p&gt;The parts I kept coming back to were:&lt;/p&gt;
 
@@ -362,9 +993,12 @@ avgRating = ratingSum / reviewCount
 &lt;ul&gt;
   &lt;li&gt;Shorten a long URL&lt;/li&gt;
   &lt;li&gt;Redirect from short URL to original URL&lt;/li&gt;
-  &lt;li&gt;Optional:&lt;/li&gt;
-  &lt;li&gt;custom alias&lt;/li&gt;
-  &lt;li&gt;expiration date&lt;/li&gt;
+  &lt;li&gt;Optional:
+    &lt;ul&gt;
+      &lt;li&gt;custom alias&lt;/li&gt;
+      &lt;li&gt;expiration date&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
 &lt;/ul&gt;
 
 &lt;h3 id=&quot;non-functional&quot;&gt;Non-Functional&lt;/h3&gt;
@@ -373,9 +1007,12 @@ avgRating = ratingSum / reviewCount
   &lt;li&gt;Low latency reads (~200ms)&lt;/li&gt;
   &lt;li&gt;High availability over strict consistency&lt;/li&gt;
   &lt;li&gt;Uniqueness of short URLs&lt;/li&gt;
-  &lt;li&gt;Scale to:&lt;/li&gt;
-  &lt;li&gt;~1B URLs&lt;/li&gt;
-  &lt;li&gt;~100M DAU&lt;/li&gt;
+  &lt;li&gt;Scale to:
+    &lt;ul&gt;
+      &lt;li&gt;~1B URLs&lt;/li&gt;
+      &lt;li&gt;~100M DAU&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
 &lt;/ul&gt;
 
 &lt;hr /&gt;
@@ -702,10 +1339,13 @@ avgRating = ratingSum / reviewCount
 &lt;ul&gt;
   &lt;li&gt;Read-heavy systems = optimize caching first&lt;/li&gt;
   &lt;li&gt;ID generation is a real problem at scale&lt;/li&gt;
-  &lt;li&gt;Simple systems get complicated when you add:&lt;/li&gt;
-  &lt;li&gt;scale&lt;/li&gt;
-  &lt;li&gt;availability&lt;/li&gt;
-  &lt;li&gt;latency constraints&lt;/li&gt;
+  &lt;li&gt;Simple systems get complicated when you add:
+    &lt;ul&gt;
+      &lt;li&gt;scale&lt;/li&gt;
+      &lt;li&gt;availability&lt;/li&gt;
+      &lt;li&gt;latency constraints&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
 &lt;/ul&gt;
 
 &lt;hr /&gt;
@@ -743,51 +1383,78 @@ avgRating = ratingSum / reviewCount
     
       <item>
         <title>Using Tesseract with Node.js</title>
-        <description>&lt;h6&gt;Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.&lt;/h6&gt;
+        <description>&lt;p&gt;This is an older note on using Tesseract OCR with Node.js.&lt;/p&gt;
 
-&lt;h5&gt;Basic setup&lt;/h5&gt;
-&lt;p&gt;To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;brew install leptonica&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;What interested me about Tesseract was that the API is actually pretty simple, but the quality of the result depends a lot on the input image.&lt;/p&gt;
 
-&lt;p&gt;After that, install tesseract globally by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;brew install tesseract&lt;/code&gt;&lt;/p&gt;
+&lt;h2 id=&quot;what-tesseract-is&quot;&gt;What Tesseract Is&lt;/h2&gt;
 
-&lt;p&gt;If you don’t have Homebrew installed, you can install Tesseract using MacPorts by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;sudo port install tesseract&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;Tesseract is an OCR engine, meaning it tries to extract text from an image.&lt;/p&gt;
 
-&lt;p&gt;If you need the engine to recognize a different language other than English, you need to specify which language you need by running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;sudo port install tesseract-&amp;lt;languagecode&amp;gt; || brew install tesseract-&amp;lt;languagecode&amp;gt;&lt;/code&gt;
-Without specifying a language code, by default it will only install the package for English recognition.&lt;/p&gt;
+&lt;p&gt;For a Node.js project, the basic idea is:&lt;/p&gt;
 
-&lt;p&gt;Besides global installation for local server development, to install the OCR engine for node, you need to run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;npm install node-tesseract&lt;/code&gt; to include as a node-module.&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;install the OCR engine locally&lt;/li&gt;
+  &lt;li&gt;use a Node wrapper to call it&lt;/li&gt;
+  &lt;li&gt;pass it an image path&lt;/li&gt;
+  &lt;li&gt;get text back&lt;/li&gt;
+&lt;/ul&gt;
 
-&lt;h5&gt;Now, on to the implementation&lt;/h5&gt;
+&lt;h2 id=&quot;basic-setup&quot;&gt;Basic Setup&lt;/h2&gt;
 
-&lt;p&gt;First off, unless you use browserify to require the module on the frontend, all of the magic will happen on the backend.&lt;/p&gt;
+&lt;p&gt;Tesseract depends on Leptonica, so that needs to be installed first.&lt;/p&gt;
 
-&lt;p&gt;You can simply require in a node file by typing,&lt;/p&gt;
-
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var tesseract = require(&apos;node-tesseract&apos;);
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;brew &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;leptonica
+brew &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;tesseract
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;There are several methods that are attached to the ‘tesseract’ variable at this point, but to tell the engine to process the image, the only method you need to use is the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.process(path, callback)&lt;/code&gt;, which takes in the path to the image file and a callback.&lt;/p&gt;
+&lt;p&gt;If you need language support beyond English, you also need to install the appropriate language package.&lt;/p&gt;
 
-&lt;p&gt;Here is an example from the documentation:&lt;/p&gt;
+&lt;p&gt;For the Node side, I used:&lt;/p&gt;
 
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;tesseract.process(__dirname + &apos;/path/to/image.jpg&apos;,function(err, text) {
-  if(err) {
-    console.error(err);
-  } else {
-    console.log(text);
-  }
-});
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;npm &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;node-tesseract
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;As you can see, the implementation of the engine is quite simple depending on the usage and the need of a precise character recognition.&lt;/p&gt;
+&lt;h2 id=&quot;basic-usage&quot;&gt;Basic Usage&lt;/h2&gt;
 
-&lt;p&gt;This is a small tip that I figured out on my own, but if your implementation of the engine is having trouble recognizing the right text, you have to consider two things. Was the text in the photo handwritten? If not, is the photo fully colored?&lt;/p&gt;
+&lt;p&gt;Most of the actual work happens on the backend.&lt;/p&gt;
 
-&lt;p&gt;If the text was handwritten, the engine will have trouble processing it because it can only recognize about 40 different fonts.&lt;/p&gt;
+&lt;p&gt;The Node wrapper is simple to require:&lt;/p&gt;
 
-&lt;p&gt;If the photo is fully colored, you need to filter the photo to be monochrome (black and white), which then will allow the engine to recognize the text more easily.&lt;/p&gt;
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;tesseract&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;node-tesseract&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;Here is the result that I got&lt;/p&gt;
+&lt;p&gt;Then you can process an image by passing in a file path and a callback:&lt;/p&gt;
+
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;tesseract&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;process&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;__dirname&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/path/to/image.jpg&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;text&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;text&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;That part is not the hard part.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-actually-matters&quot;&gt;What Actually Matters&lt;/h2&gt;
+
+&lt;p&gt;The part that mattered more in practice was the quality of the input image.&lt;/p&gt;
+
+&lt;p&gt;Two things made a big difference when I was experimenting with it:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;whether the text was handwritten&lt;/li&gt;
+  &lt;li&gt;whether the image had already been simplified into something high-contrast&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;If the text is handwritten, OCR gets much harder.&lt;/p&gt;
+
+&lt;p&gt;If the image is fully colored or noisy, converting it into something closer to black and white usually helps a lot.&lt;/p&gt;
+
+&lt;p&gt;That was the biggest practical takeaway for me: OCR quality is not just about the engine. A lot of it comes down to preprocessing the image into a form the engine can actually read well.&lt;/p&gt;
+
+&lt;p&gt;Here is the result I got:&lt;/p&gt;
 
 &lt;p&gt;&lt;img src=&quot;/images/tesseract.jpg&quot; alt=&quot;Tesseract OCR example image&quot; /&gt;
 &lt;img src=&quot;/images/tesseract2.png&quot; alt=&quot;Tesseract OCR output example&quot; /&gt;&lt;/p&gt;
@@ -803,111 +1470,136 @@ Without specifying a language code, by default it will only install the package 
         <title>Using Bcrypt with Node.js</title>
         <description>&lt;p&gt;&lt;img src=&quot;/images/bcrypt.jpg&quot; alt=&quot;Bcrypt illustration&quot; /&gt;&lt;/p&gt;
 
-&lt;p&gt;This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js
-Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.&lt;/p&gt;
+&lt;p&gt;This is an older note on using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; in Node.js.&lt;/p&gt;
 
-&lt;p&gt;While there are many different ways to salt and hash data, using bcrypt is among the easiest methods.&lt;/p&gt;
+&lt;p&gt;The main thing I was trying to understand at the time was not really how hashing works in theory, but how to structure it cleanly in an asynchronous code path when creating or validating users.&lt;/p&gt;
 
-&lt;p&gt;Implementing bcrypt for a synchronous usage is almost too easy, but for an asynchronous usage, there can be an issue.&lt;/p&gt;
+&lt;h2 id=&quot;why-bcrypt&quot;&gt;Why Bcrypt&lt;/h2&gt;
 
-&lt;h4&gt;Asynchronous implementation&lt;/h4&gt;
+&lt;p&gt;If you need to store user passwords, the important part is that you do &lt;strong&gt;not&lt;/strong&gt; store them in plain text.&lt;/p&gt;
 
-&lt;p&gt;When utilizing a promise, from the server, following the documentation’s example will not work, due to the fact that it is expecting a promise from the database-side.&lt;/p&gt;
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; is useful because it handles:&lt;/p&gt;
 
-&lt;p&gt;The solution that I was able to conceive was to use ‘Q’. Which is one of the many tools that is used to create and compose asynchronous promises.
-Implementing ‘Q’ with bcrypt turned out to be quite simple.
-First, you install the module using&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;salting&lt;/li&gt;
+  &lt;li&gt;hashing&lt;/li&gt;
+  &lt;li&gt;password comparison&lt;/li&gt;
+&lt;/ul&gt;
 
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;npm install Q&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;At the time, what tripped me up was not the hashing itself. It was how to make the async flow work cleanly with the rest of the application code.&lt;/p&gt;
 
-&lt;p&gt;Secondly, you declare a salt-factor, which will be used when generating salt. Higher the number, the larger the salt will be.&lt;/p&gt;
+&lt;h2 id=&quot;basic-flow&quot;&gt;Basic Flow&lt;/h2&gt;
 
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var salt_factor = 10;&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;The basic &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; flow looks like this:&lt;/p&gt;
 
-&lt;p&gt;Then you require the module where the insertion/query is made, by doing&lt;/p&gt;
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
 
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var Q = require(&apos;q&apos;);&lt;/code&gt;&lt;/p&gt;
-
-&lt;h5&gt;Creating a new user&lt;/h5&gt;
-&lt;p&gt;When you are inserting a user’s credentials, before salting and hashing takes place, you declare a variable that will handle the deferment.&lt;/p&gt;
-
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;var defer = Q.defer();&lt;/code&gt;&lt;/p&gt;
-
-&lt;p&gt;After that, you salt and hash the user’s password by following the example from the bcrypt documentation.&lt;/p&gt;
-
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;var bcrypt = require(&apos;bcrypt&apos;);
-bcrypt.genSalt(10, function(err, salt) {
-    bcrypt.hash(&apos;B4c0/\/&apos;, salt, function(err, hash) {
-        // Store hash in your password DB.
-    });
-});
+&lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;genSalt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;B4c0/&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\\&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;// Store hash in your password DB&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;The issue that I faced while following the example was that I the function itself, could not be used with a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then()&lt;/code&gt; or a return statement.&lt;/p&gt;
+&lt;p&gt;That part is straightforward.&lt;/p&gt;
 
-&lt;h5&gt;Here&apos;s my implementation of creating a user&lt;/h5&gt;
+&lt;p&gt;The thing I was trying to solve was how to return something usable from that async chain so the rest of the server code could continue in a predictable way.&lt;/p&gt;
 
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.createUser = function(obj) {
-    var defer = Q.defer();
-    Bcrypt.genSalt(Salt_Factor, function(err, salt) {
-        if (err) {
-            return console.error(err);
-        }
-        Bcrypt.hash(obj.password, salt, function(err, hash) {
-            if (err) {
-                return console.err(err);
-            }
-            obj.password = hash;
-            var user = new User(obj);   //Model instatiation using Mongoose
-            user.save(function(err, user) {   //Inserting the model
-                if (err) {
-                    defer.reject(err);     
-                } else {
-                    defer.resolve(user);
-                }
-            });
-        });
-    });
-    return defer.promise;
-};
+&lt;h2 id=&quot;the-approach-i-used&quot;&gt;The Approach I Used&lt;/h2&gt;
+
+&lt;p&gt;At the time, I used &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Q&lt;/code&gt; promises to wrap the async bcrypt work and return a promise from the database layer.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;npm &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;q
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;h5&gt;Checking a user&apos;s password&lt;/h5&gt;
-&lt;p&gt;Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.compare&lt;/code&gt; method instead of the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.genSalt&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.hash&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;The core idea was:&lt;/p&gt;
 
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;exports.findUser = function(obj) {
-    var defer = Q.defer();
-    User.find({ username: obj.username }).then(function(user, err) { //query method for Mongoose
-        if (err) {
-            console.log(&apos;unable to find user!!&apos;, err);
-        } else {
-            Bcrypt.compare(obj.password, user[0].password, function(err, result) {
-                if (err) {
-                    defer.reject(err);
-                } else {
-                    defer.resolve(result);
-                }
-            });
-        }
-    });
-    return defer.promise;
-};
+&lt;ul&gt;
+  &lt;li&gt;create a deferred object&lt;/li&gt;
+  &lt;li&gt;do the bcrypt work&lt;/li&gt;
+  &lt;li&gt;save the user once the password is hashed&lt;/li&gt;
+  &lt;li&gt;resolve or reject the promise&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;creating-a-user&quot;&gt;Creating a User&lt;/h2&gt;
+
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;createUser&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Q&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+    &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;genSalt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;Salt_Factor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+        &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;User&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;save&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;reject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;resolve&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;promise&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;p&gt;Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then()&lt;/code&gt; promise can be utilized.&lt;/p&gt;
+&lt;p&gt;What mattered to me here was returning &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;defer.promise&lt;/code&gt; from the outer function so the caller could keep using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then(...)&lt;/code&gt;.&lt;/p&gt;
 
-&lt;h5&gt;Example of a request handler using express&lt;/h5&gt;
+&lt;h2 id=&quot;checking-a-users-password&quot;&gt;Checking a User’s Password&lt;/h2&gt;
 
-&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;app.post(&apos;/createUser&apos;, function(req, res, next) {
-    db.createUser(req.body).then(function(user, err) {
-        if (err) {
-            res.status(406);
-        } else {
-            res.status(200);
-        }
-    });
-});
+&lt;p&gt;The login side is similar, except instead of generating a salt and hash again, you compare the incoming password against the stored hash.&lt;/p&gt;
+
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;findUser&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Q&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+    &lt;span class=&quot;nx&quot;&gt;User&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;find&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;({&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;username&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;unable to find user&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;compare&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;].&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;reject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;resolve&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;promise&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;why-this-helped&quot;&gt;Why This Helped&lt;/h2&gt;
+
+&lt;p&gt;The main lesson for me was that async security code is not hard because of bcrypt itself. It gets awkward when you need to fit it into the rest of your application flow cleanly.&lt;/p&gt;
+
+&lt;p&gt;Returning a promise from the outer function made the calling code much easier to reason about.&lt;/p&gt;
+
+&lt;h2 id=&quot;example-request-handler&quot;&gt;Example Request Handler&lt;/h2&gt;
+
+&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;app&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;post&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/createUser&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;req&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nx&quot;&gt;db&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;createUser&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;req&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;body&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;406&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;200&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;This is obviously older Node.js style now, but the core idea still holds: hash before storage, compare on login, and make the async flow easy to work with.&lt;/p&gt;
 </description>
         <pubDate>Thu, 21 Jan 2016 00:00:00 -0800</pubDate>
         <link>http://localhost:4000/2016/01/21/bcrypt.html</link>
@@ -920,26 +1612,40 @@ bcrypt.genSalt(10, function(err, salt) {
         <title>Coding Best Practices</title>
         <description>&lt;p&gt;&lt;img src=&quot;/images/CodingBestPractices.jpg&quot; alt=&quot;Coding best practices cover image&quot; /&gt;&lt;/p&gt;
 
-&lt;h3&gt;Coding Best Practices&lt;/h3&gt;
-&lt;p&gt;-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.&lt;/p&gt;
-&lt;p&gt;-Before you even touch your keyboard, Psorta-code (thinking in head when working by yourself or talking to your pair about what you think will work) then Pseudocode (Write down how your code is going to be implemented in pure words, meaning not actually coding language)&lt;/p&gt;
-&lt;p&gt;-When working on complex problems, such as forming algorithms, break down the problem into sections.&lt;/p&gt;
-&lt;p&gt;-An error message on your console is yourt friend, but when your code spits out unexpected values (assuming that you have worked out your logic), the Chrome Developer Tools is going to be your new best friend.&lt;/p&gt;
-&lt;p&gt;-When debugging, DONT BE SUPERSTITIOUS, be deliberate, form a theory then test the theory. Don’t just move things around or edit things without thinking it through, you wrote that piece of code there for a reason.&lt;/p&gt;
-&lt;p&gt;-Develop your workflow (Such as committing your work through git periodically)&lt;/p&gt;
-&lt;p&gt;-Get used to using the keyboard shortcuts on your text editor. It doesn’t matter if you’re using Sublime Text, Vim, Atom, Emacs, or Notepad++. If you’re not efficient with it, you are unnecessarily wasting your time, so don’t let other people convince you about which text editor is the best for you. Remember, Time &amp;gt;= $$$.&lt;/p&gt;
-&lt;p&gt;-To learn about OSX, Alfred, Sublime, Chrome, Bash shortcuts, checkout Josh Wyatt’s Github Repository https://github.com/joshwyatt/keyboard_shortcuts&lt;/p&gt;
-&lt;p&gt;-Encapsulation/Isolation/Modularity: Loose coupling comes with writing code with high modularity&lt;/p&gt;
-&lt;p&gt;-Encapsulation: a mechanism for wrapping the data (variables) and code acting on the data (methods) together as a single unit. (www.tutorialspoint.com/java/java_encapsulation.htm)&lt;/p&gt;
-&lt;p&gt;-Modularity refers to the dividing of an application into smaller modules. Such as having a library in a different file than the rest of your code.&lt;/p&gt;
-&lt;p&gt;-Loose coupling: you do not want your code to depend on others’ code&lt;/p&gt;
-&lt;p&gt;-Thin interface: writing a function in a way that in only takes in a handful of parameters. &lt;/p&gt;
-&lt;p&gt;-Intuitive abstractions: such as “well-written” function and variable names (self-documenting code) will save you a ton of time from having to go through your code and figuring out which is what. more readable and understandable.&lt;/p&gt;
-&lt;p&gt;-Input all dependencies: Avoid global or closure variables (Unless you know exactly what you are doing and intentionally want to taint a global variable)&lt;/p&gt;
-&lt;p&gt;-Similar to what I stated above, ideally, you don’t want to have side effects on things such as the input, global or closure variables.&lt;/p&gt;
-&lt;p&gt;-After you have a finished an MVP with no existing edge cases, style your code into shorter/ fewer/ clear lines. Basically cleaning up after yourself.&lt;/p&gt;
-&lt;p&gt;-DRY (Don’t repeat yourself)  vs  WET (We Enjoy Typing). WET is a joke among programmers. The third time you rewrite or copy and paste your code for a different function implementation, you are just showing off your inefficiency.&lt;/p&gt;
-&lt;p&gt;-“Always be humble and be ready to learn. This is a rapidly advancing field, if you start to think that you know everything, you’ll fall behind everyone else in no time.”     (Laurie Voss CTO at NPM http://sel.do)&lt;/p&gt;
+&lt;p&gt;This is an older set of notes I wrote down for myself on coding habits that still matter.&lt;/p&gt;
+
+&lt;p&gt;None of this is especially groundbreaking, but these are the kinds of things that usually make a bigger difference than whatever framework or language happens to be popular at the moment.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-i-still-believe&quot;&gt;What I Still Believe&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Build the simplest version first. An MVP is usually the fastest way to learn whether your idea actually works.&lt;/li&gt;
+  &lt;li&gt;Before writing code, spend a little time thinking through the shape of the solution. Even rough pseudocode saves a lot of wasted effort.&lt;/li&gt;
+  &lt;li&gt;When a problem feels too big, break it into smaller pieces and solve one part at a time.&lt;/li&gt;
+  &lt;li&gt;Error messages are useful. If the output still does not make sense, debugging tools are usually more helpful than random code changes.&lt;/li&gt;
+  &lt;li&gt;When debugging, try to form a theory and test it. Moving code around without a reason usually just creates more confusion.&lt;/li&gt;
+  &lt;li&gt;Develop a workflow that helps you make steady progress. For me, that usually means committing changes in reasonable chunks.&lt;/li&gt;
+  &lt;li&gt;Learn the shortcuts and tools in your editor well enough that they stop getting in your way.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;design-habits&quot;&gt;Design Habits&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Modularity matters. Splitting code into smaller pieces usually makes it easier to reason about and easier to change later.&lt;/li&gt;
+  &lt;li&gt;Loose coupling matters. The less one part of the codebase depends on another, the easier it is to evolve both.&lt;/li&gt;
+  &lt;li&gt;Thin interfaces are underrated. Functions that take a small number of inputs are usually easier to understand and test.&lt;/li&gt;
+  &lt;li&gt;Intuitive naming is worth the effort. Good names reduce the amount of mental overhead every time you come back to the code.&lt;/li&gt;
+  &lt;li&gt;Passing dependencies explicitly is usually cleaner than quietly depending on globals or hidden state.&lt;/li&gt;
+  &lt;li&gt;Avoid unnecessary side effects when you can. Predictable code is easier to debug and easier to trust.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;cleanup-matters&quot;&gt;Cleanup Matters&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Once the basic logic is working, clean it up. Shorter, clearer code is usually easier to maintain.&lt;/li&gt;
+  &lt;li&gt;DRY still matters, but only after the pattern is real. I would rather duplicate something twice than abstract it badly too early.&lt;/li&gt;
+  &lt;li&gt;Stay humble and keep learning. This field changes too fast for ego to be useful for very long.&lt;/li&gt;
+&lt;/ul&gt;
 </description>
         <pubDate>Fri, 11 Dec 2015 00:00:00 -0800</pubDate>
         <link>http://localhost:4000/2015/12/11/bestPractices.html</link>

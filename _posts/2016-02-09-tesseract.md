@@ -3,50 +3,78 @@ layout: post
 title: "Using Tesseract with Node.js"
 ---
 
+This is an older note on using Tesseract OCR with Node.js.
 
-<h6>Tesseract is an OCR (Optical Character Recognition) engine that was originally developed at Hewlett-Packard Laboratories, but has been sponsered and improved by Google since 2006.</h6>
+What interested me about Tesseract was that the API is actually pretty simple, but the quality of the result depends a lot on the input image.
 
-<h5>Basic setup</h5>
-To implement tesseract with node, Leptonica needs to be install prior to configuration. Tesseract cannot be compiled without Leptonica. To install Leptonica, simply run `brew install leptonica`
+## What Tesseract Is
 
-After that, install tesseract globally by running `brew install tesseract`
+Tesseract is an OCR engine, meaning it tries to extract text from an image.
 
-If you don't have Homebrew installed, you can install Tesseract using MacPorts by running `sudo port install tesseract`
+For a Node.js project, the basic idea is:
 
-If you need the engine to recognize a different language other than English, you need to specify which language you need by running `sudo port install tesseract-<languagecode> || brew install tesseract-<languagecode>`
-Without specifying a language code, by default it will only install the package for English recognition.
+* install the OCR engine locally
+* use a Node wrapper to call it
+* pass it an image path
+* get text back
 
-Besides global installation for local server development, to install the OCR engine for node, you need to run `npm install node-tesseract` to include as a node-module.
+## Basic Setup
 
-<h5>Now, on to the implementation</h5>
+Tesseract depends on Leptonica, so that needs to be installed first.
 
-First off, unless you use browserify to require the module on the frontend, all of the magic will happen on the backend.
+```sh
+brew install leptonica
+brew install tesseract
+```
 
-You can simply require in a node file by typing,
+If you need language support beyond English, you also need to install the appropriate language package.
 
-    var tesseract = require('node-tesseract');
+For the Node side, I used:
 
-There are several methods that are attached to the 'tesseract' variable at this point, but to tell the engine to process the image, the only method you need to use is the `.process(path, callback)`, which takes in the path to the image file and a callback.
+```sh
+npm install node-tesseract
+```
 
-Here is an example from the documentation:
+## Basic Usage
 
-    tesseract.process(__dirname + '/path/to/image.jpg',function(err, text) {
-      if(err) {
-        console.error(err);
-      } else {
-        console.log(text);
-      }
-    });
+Most of the actual work happens on the backend.
 
-As you can see, the implementation of the engine is quite simple depending on the usage and the need of a precise character recognition.
+The Node wrapper is simple to require:
 
-This is a small tip that I figured out on my own, but if your implementation of the engine is having trouble recognizing the right text, you have to consider two things. Was the text in the photo handwritten? If not, is the photo fully colored?
+```js
+var tesseract = require('node-tesseract');
+```
 
-If the text was handwritten, the engine will have trouble processing it because it can only recognize about 40 different fonts.
+Then you can process an image by passing in a file path and a callback:
 
-If the photo is fully colored, you need to filter the photo to be monochrome (black and white), which then will allow the engine to recognize the text more easily.
+```js
+tesseract.process(__dirname + '/path/to/image.jpg', function(err, text) {
+  if (err) {
+    console.error(err);
+  } else {
+    console.log(text);
+  }
+});
+```
 
-Here is the result that I got
+That part is not the hard part.
+
+## What Actually Matters
+
+The part that mattered more in practice was the quality of the input image.
+
+Two things made a big difference when I was experimenting with it:
+
+* whether the text was handwritten
+* whether the image had already been simplified into something high-contrast
+
+If the text is handwritten, OCR gets much harder.
+
+If the image is fully colored or noisy, converting it into something closer to black and white usually helps a lot.
+
+That was the biggest practical takeaway for me: OCR quality is not just about the engine. A lot of it comes down to preprocessing the image into a form the engine can actually read well.
+
+Here is the result I got:
 
 <img src="{{ '/images/tesseract.jpg' | relative_url }}" alt="Tesseract OCR example image">
 <img src="{{ '/images/tesseract2.png' | relative_url }}" alt="Tesseract OCR output example">

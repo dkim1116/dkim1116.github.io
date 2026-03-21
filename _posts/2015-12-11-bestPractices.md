@@ -2,25 +2,34 @@
 layout: post
 title: "Coding Best Practices"
 ---
+
 <img src="{{ '/images/CodingBestPractices.jpg' | relative_url }}" alt="Coding best practices cover image">
 
-<h3>Coding Best Practices</h3>
-<p>-When working on a solution to a problem for the first time, build an MVP (Minimal Viable Product) solution.</p>
-<p>-Before you even touch your keyboard, Psorta-code (thinking in head when working by yourself or talking to your pair about what you think will work) then Pseudocode (Write down how your code is going to be implemented in pure words, meaning not actually coding language)</p>
-<p>-When working on complex problems, such as forming algorithms, break down the problem into sections.</p>
-<p>-An error message on your console is yourt friend, but when your code spits out unexpected values (assuming that you have worked out your logic), the Chrome Developer Tools is going to be your new best friend.</p>
-<p>-When debugging, DONT BE SUPERSTITIOUS, be deliberate, form a theory then test the theory. Don’t just move things around or edit things without thinking it through, you wrote that piece of code there for a reason.</p>
-<p>-Develop your workflow (Such as committing your work through git periodically)</p>
-<p>-Get used to using the keyboard shortcuts on your text editor. It doesn’t matter if you’re using Sublime Text, Vim, Atom, Emacs, or Notepad++. If you’re not efficient with it, you are unnecessarily wasting your time, so don’t let other people convince you about which text editor is the best for you. Remember, Time &gt;= $$$.</p>
-<p>-To learn about OSX, Alfred, Sublime, Chrome, Bash shortcuts, checkout Josh Wyatt’s Github Repository https://github.com/joshwyatt/keyboard_shortcuts</p>
-<p>-Encapsulation/Isolation/Modularity: Loose coupling comes with writing code with high modularity</p>
-<p>-Encapsulation: a mechanism for wrapping the data (variables) and code acting on the data (methods) together as a single unit. (www.tutorialspoint.com/java/java_encapsulation.htm)</p>
-<p>-Modularity refers to the dividing of an application into smaller modules. Such as having a library in a different file than the rest of your code.</p>
-<p>-Loose coupling: you do not want your code to depend on others’ code</p>
-<p>-Thin interface: writing a function in a way that in only takes in a handful of parameters. </p>
-<p>-Intuitive abstractions: such as “well-written” function and variable names (self-documenting code) will save you a ton of time from having to go through your code and figuring out which is what. more readable and understandable.</p>
-<p>-Input all dependencies: Avoid global or closure variables (Unless you know exactly what you are doing and intentionally want to taint a global variable)</p>
-<p>-Similar to what I stated above, ideally, you don’t want to have side effects on things such as the input, global or closure variables.</p>
-<p>-After you have a finished an MVP with no existing edge cases, style your code into shorter/ fewer/ clear lines. Basically cleaning up after yourself.</p>
-<p>-DRY (Don’t repeat yourself)  vs  WET (We Enjoy Typing). WET is a joke among programmers. The third time you rewrite or copy and paste your code for a different function implementation, you are just showing off your inefficiency.</p>
-<p>-“Always be humble and be ready to learn. This is a rapidly advancing field, if you start to think that you know everything, you’ll fall behind everyone else in no time.”     (Laurie Voss CTO at NPM http://sel.do)</p>
+This is an older set of notes I wrote down for myself on coding habits that still matter.
+
+None of this is especially groundbreaking, but these are the kinds of things that usually make a bigger difference than whatever framework or language happens to be popular at the moment.
+
+## What I Still Believe
+
+* Build the simplest version first. An MVP is usually the fastest way to learn whether your idea actually works.
+* Before writing code, spend a little time thinking through the shape of the solution. Even rough pseudocode saves a lot of wasted effort.
+* When a problem feels too big, break it into smaller pieces and solve one part at a time.
+* Error messages are useful. If the output still does not make sense, debugging tools are usually more helpful than random code changes.
+* When debugging, try to form a theory and test it. Moving code around without a reason usually just creates more confusion.
+* Develop a workflow that helps you make steady progress. For me, that usually means committing changes in reasonable chunks.
+* Learn the shortcuts and tools in your editor well enough that they stop getting in your way.
+
+## Design Habits
+
+* Modularity matters. Splitting code into smaller pieces usually makes it easier to reason about and easier to change later.
+* Loose coupling matters. The less one part of the codebase depends on another, the easier it is to evolve both.
+* Thin interfaces are underrated. Functions that take a small number of inputs are usually easier to understand and test.
+* Intuitive naming is worth the effort. Good names reduce the amount of mental overhead every time you come back to the code.
+* Passing dependencies explicitly is usually cleaner than quietly depending on globals or hidden state.
+* Avoid unnecessary side effects when you can. Predictable code is easier to debug and easier to trust.
+
+## Cleanup Matters
+
+* Once the basic logic is working, clean it up. Shorter, clearer code is usually easier to maintain.
+* DRY still matters, but only after the pattern is real. I would rather duplicate something twice than abstract it badly too early.
+* Stay humble and keep learning. This field changes too fast for ego to be useful for very long.

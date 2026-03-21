@@ -48,111 +48,136 @@
   <div class="post-content" itemprop="articleBody">
     <p><img src="/images/bcrypt.jpg" alt="Bcrypt illustration" /></p>
 
-<p>This guide is to assist struggling programmers step through their own implementation of bcrypt with Node.js
-Since the genesis of the internet, salting and hashing an important piece of information has been one of the most crucial components towards having a secure site.</p>
+<p>This is an older note on using <code class="language-plaintext highlighter-rouge">bcrypt</code> in Node.js.</p>
 
-<p>While there are many different ways to salt and hash data, using bcrypt is among the easiest methods.</p>
+<p>The main thing I was trying to understand at the time was not really how hashing works in theory, but how to structure it cleanly in an asynchronous code path when creating or validating users.</p>
 
-<p>Implementing bcrypt for a synchronous usage is almost too easy, but for an asynchronous usage, there can be an issue.</p>
+<h2 id="why-bcrypt">Why Bcrypt</h2>
 
-<h4>Asynchronous implementation</h4>
+<p>If you need to store user passwords, the important part is that you do <strong>not</strong> store them in plain text.</p>
 
-<p>When utilizing a promise, from the server, following the documentation’s example will not work, due to the fact that it is expecting a promise from the database-side.</p>
+<p><code class="language-plaintext highlighter-rouge">bcrypt</code> is useful because it handles:</p>
 
-<p>The solution that I was able to conceive was to use ‘Q’. Which is one of the many tools that is used to create and compose asynchronous promises.
-Implementing ‘Q’ with bcrypt turned out to be quite simple.
-First, you install the module using</p>
+<ul>
+  <li>salting</li>
+  <li>hashing</li>
+  <li>password comparison</li>
+</ul>
 
-<p><code class="language-plaintext highlighter-rouge">npm install Q</code></p>
+<p>At the time, what tripped me up was not the hashing itself. It was how to make the async flow work cleanly with the rest of the application code.</p>
 
-<p>Secondly, you declare a salt-factor, which will be used when generating salt. Higher the number, the larger the salt will be.</p>
+<h2 id="basic-flow">Basic Flow</h2>
 
-<p><code class="language-plaintext highlighter-rouge">var salt_factor = 10;</code></p>
+<p>The basic <code class="language-plaintext highlighter-rouge">bcrypt</code> flow looks like this:</p>
 
-<p>Then you require the module where the insertion/query is made, by doing</p>
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">var</span> <span class="nx">bcrypt</span> <span class="o">=</span> <span class="nf">require</span><span class="p">(</span><span class="dl">'</span><span class="s1">bcrypt</span><span class="dl">'</span><span class="p">);</span>
 
-<p><code class="language-plaintext highlighter-rouge">var Q = require('q');</code></p>
-
-<h5>Creating a new user</h5>
-<p>When you are inserting a user’s credentials, before salting and hashing takes place, you declare a variable that will handle the deferment.</p>
-
-<p><code class="language-plaintext highlighter-rouge">var defer = Q.defer();</code></p>
-
-<p>After that, you salt and hash the user’s password by following the example from the bcrypt documentation.</p>
-
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var bcrypt = require('bcrypt');
-bcrypt.genSalt(10, function(err, salt) {
-    bcrypt.hash('B4c0/\/', salt, function(err, hash) {
-        // Store hash in your password DB.
-    });
-});
+<span class="nx">bcrypt</span><span class="p">.</span><span class="nf">genSalt</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">salt</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">bcrypt</span><span class="p">.</span><span class="nf">hash</span><span class="p">(</span><span class="dl">'</span><span class="s1">B4c0/</span><span class="se">\\</span><span class="s1">/</span><span class="dl">'</span><span class="p">,</span> <span class="nx">salt</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">hash</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">// Store hash in your password DB</span>
+    <span class="p">});</span>
+<span class="p">});</span>
 </code></pre></div></div>
 
-<p>The issue that I faced while following the example was that I the function itself, could not be used with a <code class="language-plaintext highlighter-rouge">.then()</code> or a return statement.</p>
+<p>That part is straightforward.</p>
 
-<h5>Here's my implementation of creating a user</h5>
+<p>The thing I was trying to solve was how to return something usable from that async chain so the rest of the server code could continue in a predictable way.</p>
 
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>exports.createUser = function(obj) {
-    var defer = Q.defer();
-    Bcrypt.genSalt(Salt_Factor, function(err, salt) {
-        if (err) {
-            return console.error(err);
-        }
-        Bcrypt.hash(obj.password, salt, function(err, hash) {
-            if (err) {
-                return console.err(err);
-            }
-            obj.password = hash;
-            var user = new User(obj);   //Model instatiation using Mongoose
-            user.save(function(err, user) {   //Inserting the model
-                if (err) {
-                    defer.reject(err);     
-                } else {
-                    defer.resolve(user);
-                }
-            });
-        });
-    });
-    return defer.promise;
-};
+<h2 id="the-approach-i-used">The Approach I Used</h2>
+
+<p>At the time, I used <code class="language-plaintext highlighter-rouge">Q</code> promises to wrap the async bcrypt work and return a promise from the database layer.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>npm <span class="nb">install </span>q
 </code></pre></div></div>
 
-<h5>Checking a user's password</h5>
-<p>Similar to the example above, when checking a user’s credentials to the ones stored in your database, you use the <code class="language-plaintext highlighter-rouge">.compare</code> method instead of the <code class="language-plaintext highlighter-rouge">.genSalt</code> and <code class="language-plaintext highlighter-rouge">.hash</code>.</p>
+<p>The core idea was:</p>
 
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>exports.findUser = function(obj) {
-    var defer = Q.defer();
-    User.find({ username: obj.username }).then(function(user, err) { //query method for Mongoose
-        if (err) {
-            console.log('unable to find user!!', err);
-        } else {
-            Bcrypt.compare(obj.password, user[0].password, function(err, result) {
-                if (err) {
-                    defer.reject(err);
-                } else {
-                    defer.resolve(result);
-                }
-            });
-        }
-    });
-    return defer.promise;
-};
+<ul>
+  <li>create a deferred object</li>
+  <li>do the bcrypt work</li>
+  <li>save the user once the password is hashed</li>
+  <li>resolve or reject the promise</li>
+</ul>
+
+<h2 id="creating-a-user">Creating a User</h2>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">exports</span><span class="p">.</span><span class="nx">createUser</span> <span class="o">=</span> <span class="kd">function</span><span class="p">(</span><span class="nx">obj</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">defer</span> <span class="o">=</span> <span class="nx">Q</span><span class="p">.</span><span class="nf">defer</span><span class="p">();</span>
+
+    <span class="nx">Bcrypt</span><span class="p">.</span><span class="nf">genSalt</span><span class="p">(</span><span class="nx">Salt_Factor</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">salt</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">return</span> <span class="nx">console</span><span class="p">.</span><span class="nf">error</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="nx">Bcrypt</span><span class="p">.</span><span class="nf">hash</span><span class="p">(</span><span class="nx">obj</span><span class="p">.</span><span class="nx">password</span><span class="p">,</span> <span class="nx">salt</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">hash</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">return</span> <span class="nx">console</span><span class="p">.</span><span class="nf">error</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+            <span class="p">}</span>
+
+            <span class="nx">obj</span><span class="p">.</span><span class="nx">password</span> <span class="o">=</span> <span class="nx">hash</span><span class="p">;</span>
+
+            <span class="kd">var</span> <span class="nx">user</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">User</span><span class="p">(</span><span class="nx">obj</span><span class="p">);</span>
+            <span class="nx">user</span><span class="p">.</span><span class="nf">save</span><span class="p">(</span><span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">user</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="nx">defer</span><span class="p">.</span><span class="nf">reject</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                    <span class="nx">defer</span><span class="p">.</span><span class="nf">resolve</span><span class="p">(</span><span class="nx">user</span><span class="p">);</span>
+                <span class="p">}</span>
+            <span class="p">});</span>
+        <span class="p">});</span>
+    <span class="p">});</span>
+
+    <span class="k">return</span> <span class="nx">defer</span><span class="p">.</span><span class="nx">promise</span><span class="p">;</span>
+<span class="p">};</span>
 </code></pre></div></div>
 
-<p>Notice how defer.promise is returned in both of the examples at the end of the function body. By returning defer.promise outside of the invocation of bcrypt methods, from the server, the <code class="language-plaintext highlighter-rouge">.then()</code> promise can be utilized.</p>
+<p>What mattered to me here was returning <code class="language-plaintext highlighter-rouge">defer.promise</code> from the outer function so the caller could keep using <code class="language-plaintext highlighter-rouge">.then(...)</code>.</p>
 
-<h5>Example of a request handler using express</h5>
+<h2 id="checking-a-users-password">Checking a User’s Password</h2>
 
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>app.post('/createUser', function(req, res, next) {
-    db.createUser(req.body).then(function(user, err) {
-        if (err) {
-            res.status(406);
-        } else {
-            res.status(200);
-        }
-    });
-});
+<p>The login side is similar, except instead of generating a salt and hash again, you compare the incoming password against the stored hash.</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">exports</span><span class="p">.</span><span class="nx">findUser</span> <span class="o">=</span> <span class="kd">function</span><span class="p">(</span><span class="nx">obj</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">defer</span> <span class="o">=</span> <span class="nx">Q</span><span class="p">.</span><span class="nf">defer</span><span class="p">();</span>
+
+    <span class="nx">User</span><span class="p">.</span><span class="nf">find</span><span class="p">({</span> <span class="na">username</span><span class="p">:</span> <span class="nx">obj</span><span class="p">.</span><span class="nx">username</span> <span class="p">}).</span><span class="nf">then</span><span class="p">(</span><span class="kd">function</span><span class="p">(</span><span class="nx">user</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+            <span class="nx">console</span><span class="p">.</span><span class="nf">log</span><span class="p">(</span><span class="dl">'</span><span class="s1">unable to find user</span><span class="dl">'</span><span class="p">,</span> <span class="nx">err</span><span class="p">);</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+            <span class="nx">Bcrypt</span><span class="p">.</span><span class="nf">compare</span><span class="p">(</span><span class="nx">obj</span><span class="p">.</span><span class="nx">password</span><span class="p">,</span> <span class="nx">user</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">password</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span> <span class="nx">result</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="nx">defer</span><span class="p">.</span><span class="nf">reject</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                    <span class="nx">defer</span><span class="p">.</span><span class="nf">resolve</span><span class="p">(</span><span class="nx">result</span><span class="p">);</span>
+                <span class="p">}</span>
+            <span class="p">});</span>
+        <span class="p">}</span>
+    <span class="p">});</span>
+
+    <span class="k">return</span> <span class="nx">defer</span><span class="p">.</span><span class="nx">promise</span><span class="p">;</span>
+<span class="p">};</span>
 </code></pre></div></div>
+
+<h2 id="why-this-helped">Why This Helped</h2>
+
+<p>The main lesson for me was that async security code is not hard because of bcrypt itself. It gets awkward when you need to fit it into the rest of your application flow cleanly.</p>
+
+<p>Returning a promise from the outer function made the calling code much easier to reason about.</p>
+
+<h2 id="example-request-handler">Example Request Handler</h2>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">app</span><span class="p">.</span><span class="nf">post</span><span class="p">(</span><span class="dl">'</span><span class="s1">/createUser</span><span class="dl">'</span><span class="p">,</span> <span class="kd">function</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span> <span class="nx">res</span><span class="p">,</span> <span class="nx">next</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">db</span><span class="p">.</span><span class="nf">createUser</span><span class="p">(</span><span class="nx">req</span><span class="p">.</span><span class="nx">body</span><span class="p">).</span><span class="nf">then</span><span class="p">(</span><span class="kd">function</span><span class="p">(</span><span class="nx">user</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="p">{</span>
+            <span class="nx">res</span><span class="p">.</span><span class="nf">status</span><span class="p">(</span><span class="mi">406</span><span class="p">);</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+            <span class="nx">res</span><span class="p">.</span><span class="nf">status</span><span class="p">(</span><span class="mi">200</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">});</span>
+<span class="p">});</span>
+</code></pre></div></div>
+
+<p>This is obviously older Node.js style now, but the core idea still holds: hash before storage, compare on login, and make the async flow easy to work with.</p>
 
   </div>
 

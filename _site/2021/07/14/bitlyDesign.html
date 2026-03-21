@@ -48,7 +48,7 @@
   <div class="post-content" itemprop="articleBody">
     <p>This is my attempt at thinking through a URL shortener system like Bit.ly.</p>
 
-<p>At first this one felt much simpler than something like Yelp, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.</p>
+<p>At first this one felt simple, but once I started thinking about traffic patterns and uniqueness, it got interesting pretty fast.</p>
 
 <p>The parts I kept coming back to were:</p>
 
@@ -70,9 +70,12 @@
 <ul>
   <li>Shorten a long URL</li>
   <li>Redirect from short URL to original URL</li>
-  <li>Optional:</li>
-  <li>custom alias</li>
-  <li>expiration date</li>
+  <li>Optional:
+    <ul>
+      <li>custom alias</li>
+      <li>expiration date</li>
+    </ul>
+  </li>
 </ul>
 
 <h3 id="non-functional">Non-Functional</h3>
@@ -81,9 +84,12 @@
   <li>Low latency reads (~200ms)</li>
   <li>High availability over strict consistency</li>
   <li>Uniqueness of short URLs</li>
-  <li>Scale to:</li>
-  <li>~1B URLs</li>
-  <li>~100M DAU</li>
+  <li>Scale to:
+    <ul>
+      <li>~1B URLs</li>
+      <li>~100M DAU</li>
+    </ul>
+  </li>
 </ul>
 
 <hr />
@@ -410,10 +416,13 @@
 <ul>
   <li>Read-heavy systems = optimize caching first</li>
   <li>ID generation is a real problem at scale</li>
-  <li>Simple systems get complicated when you add:</li>
-  <li>scale</li>
-  <li>availability</li>
-  <li>latency constraints</li>
+  <li>Simple systems get complicated when you add:
+    <ul>
+      <li>scale</li>
+      <li>availability</li>
+      <li>latency constraints</li>
+    </ul>
+  </li>
 </ul>
 
 <hr />

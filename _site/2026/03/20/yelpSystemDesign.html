@@ -108,6 +108,7 @@
 <hr />
 
 <h2 id="-search-flow">🔍 Search Flow</h2>
+
 <p><img src="/images/yelp-search-flow.png" alt="Yelp-like system search flow" /></p>
 
 <p>When I first thought about this, I assumed I’d just query the database.</p>
@@ -355,8 +356,11 @@ avgRating = ratingSum / reviewCount
 
 <ul>
   <li>Redis caching for hot queries</li>
-  <li>better ranking:</li>
-  <li>distance + rating + popularity</li>
+  <li>better ranking:
+    <ul>
+      <li>distance + rating + popularity</li>
+    </ul>
+  </li>
   <li>cursor-based pagination</li>
   <li>sharding for scale</li>
 </ul>
