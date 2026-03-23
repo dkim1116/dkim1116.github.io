@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Designing a WhatsApp System</title>
+  <meta name="description" content="This is my attempt at thinking through a WhatsApp-like system.">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://localhost:4000/2026/02/10/whatsAppDesign.html">
+  <link rel="alternate" type="application/rss+xml" title="Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure" href="http://localhost:4000/feed.xml">
+</head>
+
+
+  <body>
+
+    <main class="wrapper">
+      <nav class="navigation">
+  <section class="container">
+    <a class="navigation-title" href="/">
+      <span class="title">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</span>
+    </a>
+
+    <ul class="navigation-list">
+      <li class="navigation-item">
+        <a class="navigation-link" href="/about/">About</a>
+      </li>
+    </ul>
+  </section>
+</nav>
+
+    </main>
+
+    
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Designing a WhatsApp System</h1>
+    <p class="post-meta"><time datetime="2026-02-10T00:00:00-08:00" itemprop="datePublished">Feb 10, 2026</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This is my attempt at thinking through a WhatsApp-like system.</p>
+
+<p>I liked this one because it is not just a normal CRUD-style system. Once I started thinking through it, there were a few things that immediately made it feel different:</p>
+
+<ul>
+  <li>real-time messaging</li>
+  <li>offline delivery</li>
+  <li>stateful connections</li>
+  <li>very large scale</li>
+</ul>
+
+<p>These are basically my notes on how I’d reason through it right now.</p>
+
+<hr />
+
+<h2 id="requirements">Requirements</h2>
+
+<h3 id="non-functional">Non-functional</h3>
+
+<ul>
+  <li>Availability &gt; Consistency</li>
+  <li>Low latency for send and receive</li>
+  <li>Handle very large scale</li>
+  <li>Ensure messages are eventually delivered</li>
+</ul>
+
+<hr />
+
+<h2 id="core-entities">Core Entities</h2>
+
+<p>The main pieces I care about are:</p>
+
+<ul>
+  <li>user</li>
+  <li>chat</li>
+  <li>message</li>
+  <li>attachment</li>
+</ul>
+
+<hr />
+
+<h2 id="api-style">API Style</h2>
+
+<p>This one feels more event-driven than normal REST because the system needs to push updates back to the client in real time.</p>
+
+<h3 id="client--server">Client → Server</h3>
+
+<ul>
+  <li>createChat</li>
+  <li>sendMessage</li>
+  <li>updateChat</li>
+  <li>sendAttachment</li>
+</ul>
+
+<h3 id="server--client">Server → Client</h3>
+
+<ul>
+  <li>chatCreated</li>
+  <li>chatUpdated</li>
+  <li>messageReceived</li>
+  <li>newAttachment</li>
+</ul>
+
+<hr />
+
+<h2 id="high-level-architecture">High-level architecture</h2>
+<p><img src="/images/whatsapp-arch.png" alt="whatsapp system architecture diagram" /></p>
+
+<p>I split this into a few main pieces:</p>
+
+<ul>
+  <li>Chat service → manages chats + participants</li>
+  <li>Message service → handles sending messages</li>
+  <li>Database → stores chats + messages</li>
+  <li>Async worker → handles fan-out (writing to inbox)</li>
+</ul>
+
+<p>When a message is sent:</p>
+<ul>
+  <li>it gets stored first</li>
+  <li>then an async worker figures out who should receive it</li>
+</ul>
+
+<p>This keeps the write path fast and pushes the heavier work to background processing.</p>
+
+<hr />
+
+<h2 id="creating-chats">Creating Chats</h2>
+
+<p>When a user creates a chat, the basic flow in my head is:</p>
+
+<ol>
+  <li>request goes through the load balancer to the Chat Service</li>
+  <li>Chat Service creates a new <code class="language-plaintext highlighter-rouge">chatId</code></li>
+  <li>write chat metadata</li>
+  <li>write chat participants</li>
+</ol>
+
+<p>I would probably keep a <code class="language-plaintext highlighter-rouge">ChatParticipants</code> table because one of the main queries I care about is:</p>
+
+<blockquote>
+  <p>what chats does this user belong to?</p>
+</blockquote>
+
+<p>So I’d structure it around:</p>
+
+<ul>
+  <li>partition key: <code class="language-plaintext highlighter-rouge">userId</code></li>
+  <li>sort key: <code class="language-plaintext highlighter-rouge">chatId</code></li>
+</ul>
+
+<p>That makes it easy to fetch all chats for a given user.</p>
+
+<p>Note: I decided to use dynamoDB here as it handles massive throughput, horizontal scaling, and is managed so it ensures resiliency and operational simplicity</p>
+
+<hr />
+
+<h2 id="message-storage">Message Storage</h2>
+
+<p>For message storage, I’d create a <code class="language-plaintext highlighter-rouge">Message</code> table with:</p>
+
+<ul>
+  <li>partition key: <code class="language-plaintext highlighter-rouge">chatId</code></li>
+  <li>sort key: <code class="language-plaintext highlighter-rouge">createdAt</code></li>
+</ul>
+
+<p>Other useful fields:</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">messageId</code></li>
+  <li><code class="language-plaintext highlighter-rouge">content</code></li>
+  <li><code class="language-plaintext highlighter-rouge">attachment</code></li>
+  <li><code class="language-plaintext highlighter-rouge">senderId</code></li>
+</ul>
+
+<p>The reason this structure makes sense to me is that the main read pattern is:</p>
+
+<blockquote>
+  <p>give me messages for this chat</p>
+</blockquote>
+
+<p>So grouping by <code class="language-plaintext highlighter-rouge">chatId</code> and sorting by creation time feels natural.</p>
+
+<p>One thing I haven’t fully solved here is strict message ordering.</p>
+
+<p>Using <code class="language-plaintext highlighter-rouge">createdAt</code> as a sort key gives a reasonable ordering within a chat, but in a real system we might need something stronger like sequence numbers or server-side ordering guarantees.</p>
+
+<hr />
+
+<h2 id="reading-messages">Reading Messages</h2>
+
+<p>When the client opens a chat:</p>
+
+<ul>
+  <li>it already knows the <code class="language-plaintext highlighter-rouge">chatId</code></li>
+  <li>it requests messages for that chat</li>
+  <li>the backend queries by <code class="language-plaintext highlighter-rouge">chatId</code></li>
+  <li>results are paginated by <code class="language-plaintext highlighter-rouge">createdAt</code></li>
+</ul>
+
+<p>That part feels pretty standard compared to the rest of the system.</p>
+
+<hr />
+
+<h2 id="real-time-delivery">Real-Time Delivery</h2>
+
+<p>At first I thought:</p>
+
+<blockquote>
+  <p>just poll the server</p>
+</blockquote>
+
+<p>That falls apart pretty fast at this scale.</p>
+
+<p>So I’d use <strong>WebSockets</strong> instead.</p>
+
+<p>The mental model for me is:</p>
+
+<ul>
+  <li>client opens a persistent connection</li>
+  <li>server keeps that connection alive</li>
+  <li>new messages get pushed down immediately</li>
+</ul>
+
+<p>That avoids constant polling and reduces a lot of unnecessary traffic.</p>
+
+<hr />
+
+<h2 id="handling-offline-users">Handling Offline Users</h2>
+
+<p>This was one of the first parts that made the system feel more interesting.</p>
+
+<p>If the user is offline, I still need the message to show up later.</p>
+
+<p>The way I’d think about that is with an inbox-like table.</p>
+
+<h3 id="flow">Flow</h3>
+
+<ol>
+  <li>Message Service writes the message to the <code class="language-plaintext highlighter-rouge">Message</code> table</li>
+  <li>it emits an event</li>
+  <li>an async worker consumes that event</li>
+  <li>the worker finds the participants in the chat</li>
+  <li>for any offline user, it writes a pending entry into that user’s inbox</li>
+</ol>
+
+<p>So the inbox table would look something like:</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">userId</code></li>
+  <li><code class="language-plaintext highlighter-rouge">messageId</code></li>
+  <li><code class="language-plaintext highlighter-rouge">chatId</code></li>
+</ul>
+
+<hr />
+
+<h2 id="when-the-user-reconnects">When the User Reconnects</h2>
+
+<p>When the client reconnects:</p>
+
+<ul>
+  <li>the server checks the inbox</li>
+  <li>delivers any pending messages</li>
+  <li>once the client acknowledges them, those inbox entries can be removed</li>
+</ul>
+
+<p>That way the inbox is really just there as a delivery backlog, not the primary source of truth.</p>
+
+<hr />
+
+<h2 id="when-the-user-is-already-online">When the User Is Already Online</h2>
+
+<p>If the user already has an active WebSocket connection:</p>
+
+<ul>
+  <li>send the message directly</li>
+  <li>skip the inbox path unless delivery fails</li>
+</ul>
+
+<p>So in my head the inbox is really for:</p>
+
+<ul>
+  <li>offline users</li>
+  <li>fallback when direct delivery does not succeed</li>
+</ul>
+
+<hr />
+
+<h2 id="sending-attachments">Sending Attachments</h2>
+
+<p>For attachments, I would not store the actual file directly in the main database.</p>
+
+<p>The flow I’d expect is:</p>
+
+<ol>
+  <li>user uploads an attachment</li>
+  <li>Message Service stores the file in blob storage like S3</li>
+  <li>the service gets back a URL or object reference</li>
+  <li>the message record stores that reference</li>
+  <li>clients download the attachment from blob storage</li>
+</ol>
+
+<p>That keeps the message path lighter and avoids pushing large binary objects into the message database.</p>
+
+<hr />
+
+<h2 id="scaling-the-system">Scaling the System</h2>
+
+<p>At this scale, most of the services need to be horizontally scalable.</p>
+
+<p>The parts that scale nicely are:</p>
+
+<ul>
+  <li>stateless service layer</li>
+  <li>async workers</li>
+  <li>storage systems that are already designed for partitioning</li>
+</ul>
+
+<p>The part that gets trickier is WebSockets, because WebSockets make the connection layer stateful.</p>
+
+<hr />
+
+<h2 id="why-websockets-make-this-harder">Why WebSockets Make This Harder</h2>
+
+<p>This is where the design stopped feeling straightforward to me.</p>
+
+<p>If:</p>
+
+<ul>
+  <li>User A is connected to Server 1</li>
+  <li>User B is connected to Server 2</li>
+</ul>
+
+<p>and B sends a message to A, then Server 2 needs some way to get that message over to Server 1.</p>
+
+<p>That is where I started thinking about Pub/Sub.</p>
+
+<hr />
+
+<h2 id="pubsub-for-cross-server-routing">Pub/Sub for Cross-Server Routing</h2>
+
+<p>The way I think about it is:</p>
+
+<ul>
+  <li>each WebSocket server knows which users are connected to it</li>
+  <li>each server subscribes to the users it is currently responsible for</li>
+</ul>
+
+<p>So if User B sends a message to User A:</p>
+
+<ol>
+  <li>Server 2 receives the message</li>
+  <li>Server 2 publishes an event for User A</li>
+  <li>Pub/Sub routes that event to Server 1</li>
+  <li>Server 1 pushes the message to User A over the active WebSocket connection</li>
+</ol>
+
+<p>The simple mental model for me is:</p>
+
+<ul>
+  <li>Pub/Sub handles server-to-server routing</li>
+  <li>WebSocket handles final delivery to the client</li>
+</ul>
+
+<hr />
+
+<h2 id="handling-reconnection">Handling Reconnection</h2>
+
+<p>When a user disconnects:</p>
+
+<ul>
+  <li>remove the active connection from the connection registry</li>
+  <li>unsubscribe or update the server’s routing state</li>
+</ul>
+
+<p>When the user reconnects:</p>
+
+<ul>
+  <li>the load balancer routes them to some server</li>
+  <li>that server registers the connection</li>
+  <li>checks the inbox for missed messages</li>
+  <li>delivers whatever is still pending</li>
+</ul>
+
+<hr />
+
+<h2 id="handling-multiple-devices">Handling Multiple Devices</h2>
+
+<p>A user may be connected on more than one device:</p>
+
+<ul>
+  <li>phone</li>
+  <li>laptop</li>
+  <li>tablet</li>
+</ul>
+
+<p>The simplest way for me to think about that is to treat each device as its own active connection.</p>
+
+<p>So:</p>
+
+<ul>
+  <li>one <code class="language-plaintext highlighter-rouge">userId</code> can map to multiple active connections</li>
+  <li>when a message arrives, it gets pushed to all active devices for that user</li>
+</ul>
+
+<p>That keeps the user experience consistent across devices.</p>
+
+<hr />
+
+<h2 id="tradeoffs">Tradeoffs</h2>
+
+<p>This design gives me:</p>
+
+<ul>
+  <li>real-time delivery</li>
+  <li>offline delivery</li>
+  <li>horizontal scalability for most components</li>
+</ul>
+
+<p>But the tradeoffs are:</p>
+
+<ul>
+  <li>eventual consistency</li>
+  <li>stateful WebSocket infrastructure</li>
+  <li>extra complexity from Pub/Sub</li>
+  <li>extra writes for offline inbox handling</li>
+</ul>
+
+<p>For this kind of system, those tradeoffs feel worth it.</p>
+
+<hr />
+
+<h2 id="what-i-learned">What I Learned</h2>
+
+<p>The biggest things this made me realize were:</p>
+
+<ul>
+  <li>real-time systems force you to think a lot more about connection state</li>
+  <li>delivery guarantees usually mean extra storage somewhere</li>
+  <li>Pub/Sub becomes really useful once users are connected to different servers</li>
+  <li>the hard part is not just storing the data, it is routing and delivering it correctly</li>
+</ul>
+
+<hr />
+
+<h2 id="final-thoughts">Final Thoughts</h2>
+
+<p>This one helped me realize that real-time systems need a pretty different mental model than normal request/response systems.</p>
+
+<p>There is a lot more coordination involved:</p>
+
+<ul>
+  <li>connection state</li>
+  <li>delivery guarantees</li>
+  <li>cross-server routing</li>
+</ul>
+
+<p>I’m still learning this area, but this one was a really useful problem to work through.</p>
+
+<hr />
+
+<h2 id="future-improvements">Future Improvements</h2>
+
+<ul>
+  <li>stronger message ordering guarantees</li>
+  <li>read receipts</li>
+  <li>end-to-end encryption</li>
+  <li>multi-region delivery</li>
+  <li>per-user rate limiting</li>
+</ul>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+  <div class="wrapper">
+    <div class="container">
+      <div class="row">
+        <div class="column">
+          <h2 class="footer-heading">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</h2>
+          <p class="footer-description">Notes on software engineering, backend development, and problem solving.
+</p>
+        </div>
+
+        <div class="column">
+          <ul class="social-media-list">
+            
+            <li>
+              <a href="https://github.com/dkim1116"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">dkim1116</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="https://www.linkedin.com/in/dkim1116/"><span class="icon icon--linkedin"><svg viewBox="0 0 16 16"><path fill="#828282" d="M3.02 2.455A1.12 1.12 0 1 1 .78 2.454a1.12 1.12 0 0 1 2.24 0zM.95 4.217h2.14V15.05H.95V4.217zM6.48 4.217h2.05v1.48h.03c.29-.54.98-1.67 2.4-1.67 2.56 0 3.03 1.69 3.03 3.88v7.14h-2.14V8.72c0-1.51-.03-3.45-2.1-3.45-2.1 0-2.42 1.64-2.42 3.34v6.44H6.48V4.217z"/></svg>
+</span><span class="username">LinkedIn</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="mailto:daniel.kim1116@gmail.com"><span class="icon icon--mail"><svg viewBox="0 0 512 512"><path d="M101.3 141.6v228.9h0.3 308.4 0.8V141.6H101.3zM375.7 167.8l-119.7 91.5 -119.6-91.5H375.7zM127.6 194.1l64.1 49.1 -64.1 64.1V194.1zM127.8 344.2l84.9-84.9 43.2 33.1 43-32.9 84.7 84.7L127.8 344.2 127.8 344.2zM384.4 307.8l-64.4-64.4 64.4-49.3V307.8z"/></svg></span><span class="username">daniel.kim1116@gmail.com</span></a>
+
+            </li>
+            
+          </ul>
+        </div>
+
+
+      </div>
+    </div>  
+  </div>
+</footer>
+
+
+  </body>
+
+</html>

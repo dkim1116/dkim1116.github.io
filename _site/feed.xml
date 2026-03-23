@@ -6,8 +6,8 @@
 </description>
     <link>http://localhost:4000/</link>
     <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 20 Mar 2026 18:19:35 -0700</pubDate>
-    <lastBuildDate>Fri, 20 Mar 2026 18:19:35 -0700</lastBuildDate>
+    <pubDate>Fri, 20 Mar 2026 20:44:34 -0700</pubDate>
+    <lastBuildDate>Fri, 20 Mar 2026 20:44:34 -0700</lastBuildDate>
     <generator>Jekyll v4.4.1</generator>
     
       <item>
@@ -336,6 +336,446 @@ avgRating = ratingSum / reviewCount
         <pubDate>Fri, 20 Mar 2026 00:00:00 -0700</pubDate>
         <link>http://localhost:4000/2026/03/20/yelpSystemDesign.html</link>
         <guid isPermaLink="true">http://localhost:4000/2026/03/20/yelpSystemDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Designing a WhatsApp System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a WhatsApp-like system.&lt;/p&gt;
+
+&lt;p&gt;I liked this one because it is not just a normal CRUD-style system. Once I started thinking through it, there were a few things that immediately made it feel different:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;real-time messaging&lt;/li&gt;
+  &lt;li&gt;offline delivery&lt;/li&gt;
+  &lt;li&gt;stateful connections&lt;/li&gt;
+  &lt;li&gt;very large scale&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;These are basically my notes on how I’d reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;requirements&quot;&gt;Requirements&lt;/h2&gt;
+
+&lt;h3 id=&quot;non-functional&quot;&gt;Non-functional&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Availability &amp;gt; Consistency&lt;/li&gt;
+  &lt;li&gt;Low latency for send and receive&lt;/li&gt;
+  &lt;li&gt;Handle very large scale&lt;/li&gt;
+  &lt;li&gt;Ensure messages are eventually delivered&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;core-entities&quot;&gt;Core Entities&lt;/h2&gt;
+
+&lt;p&gt;The main pieces I care about are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;user&lt;/li&gt;
+  &lt;li&gt;chat&lt;/li&gt;
+  &lt;li&gt;message&lt;/li&gt;
+  &lt;li&gt;attachment&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;api-style&quot;&gt;API Style&lt;/h2&gt;
+
+&lt;p&gt;This one feels more event-driven than normal REST because the system needs to push updates back to the client in real time.&lt;/p&gt;
+
+&lt;h3 id=&quot;client--server&quot;&gt;Client → Server&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;createChat&lt;/li&gt;
+  &lt;li&gt;sendMessage&lt;/li&gt;
+  &lt;li&gt;updateChat&lt;/li&gt;
+  &lt;li&gt;sendAttachment&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;server--client&quot;&gt;Server → Client&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;chatCreated&lt;/li&gt;
+  &lt;li&gt;chatUpdated&lt;/li&gt;
+  &lt;li&gt;messageReceived&lt;/li&gt;
+  &lt;li&gt;newAttachment&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-architecture&quot;&gt;High-level architecture&lt;/h2&gt;
+&lt;p&gt;&lt;img src=&quot;/images/whatsapp-arch.png&quot; alt=&quot;whatsapp system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;I split this into a few main pieces:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Chat service → manages chats + participants&lt;/li&gt;
+  &lt;li&gt;Message service → handles sending messages&lt;/li&gt;
+  &lt;li&gt;Database → stores chats + messages&lt;/li&gt;
+  &lt;li&gt;Async worker → handles fan-out (writing to inbox)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;When a message is sent:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;it gets stored first&lt;/li&gt;
+  &lt;li&gt;then an async worker figures out who should receive it&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This keeps the write path fast and pushes the heavier work to background processing.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;creating-chats&quot;&gt;Creating Chats&lt;/h2&gt;
+
+&lt;p&gt;When a user creates a chat, the basic flow in my head is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;request goes through the load balancer to the Chat Service&lt;/li&gt;
+  &lt;li&gt;Chat Service creates a new &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;write chat metadata&lt;/li&gt;
+  &lt;li&gt;write chat participants&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;I would probably keep a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ChatParticipants&lt;/code&gt; table because one of the main queries I care about is:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;what chats does this user belong to?&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;So I’d structure it around:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;partition key: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;sort key: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That makes it easy to fetch all chats for a given user.&lt;/p&gt;
+
+&lt;p&gt;Note: I decided to use dynamoDB here as it handles massive throughput, horizontal scaling, and is managed so it ensures resiliency and operational simplicity&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;message-storage&quot;&gt;Message Storage&lt;/h2&gt;
+
+&lt;p&gt;For message storage, I’d create a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Message&lt;/code&gt; table with:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;partition key: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;sort key: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdAt&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Other useful fields:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;messageId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;content&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;attachment&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;senderId&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The reason this structure makes sense to me is that the main read pattern is:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;give me messages for this chat&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;So grouping by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt; and sorting by creation time feels natural.&lt;/p&gt;
+
+&lt;p&gt;One thing I haven’t fully solved here is strict message ordering.&lt;/p&gt;
+
+&lt;p&gt;Using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdAt&lt;/code&gt; as a sort key gives a reasonable ordering within a chat, but in a real system we might need something stronger like sequence numbers or server-side ordering guarantees.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;reading-messages&quot;&gt;Reading Messages&lt;/h2&gt;
+
+&lt;p&gt;When the client opens a chat:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;it already knows the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;it requests messages for that chat&lt;/li&gt;
+  &lt;li&gt;the backend queries by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;results are paginated by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdAt&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That part feels pretty standard compared to the rest of the system.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;real-time-delivery&quot;&gt;Real-Time Delivery&lt;/h2&gt;
+
+&lt;p&gt;At first I thought:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just poll the server&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That falls apart pretty fast at this scale.&lt;/p&gt;
+
+&lt;p&gt;So I’d use &lt;strong&gt;WebSockets&lt;/strong&gt; instead.&lt;/p&gt;
+
+&lt;p&gt;The mental model for me is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;client opens a persistent connection&lt;/li&gt;
+  &lt;li&gt;server keeps that connection alive&lt;/li&gt;
+  &lt;li&gt;new messages get pushed down immediately&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That avoids constant polling and reduces a lot of unnecessary traffic.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;handling-offline-users&quot;&gt;Handling Offline Users&lt;/h2&gt;
+
+&lt;p&gt;This was one of the first parts that made the system feel more interesting.&lt;/p&gt;
+
+&lt;p&gt;If the user is offline, I still need the message to show up later.&lt;/p&gt;
+
+&lt;p&gt;The way I’d think about that is with an inbox-like table.&lt;/p&gt;
+
+&lt;h3 id=&quot;flow&quot;&gt;Flow&lt;/h3&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Message Service writes the message to the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Message&lt;/code&gt; table&lt;/li&gt;
+  &lt;li&gt;it emits an event&lt;/li&gt;
+  &lt;li&gt;an async worker consumes that event&lt;/li&gt;
+  &lt;li&gt;the worker finds the participants in the chat&lt;/li&gt;
+  &lt;li&gt;for any offline user, it writes a pending entry into that user’s inbox&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;So the inbox table would look something like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;messageId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;chatId&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;when-the-user-reconnects&quot;&gt;When the User Reconnects&lt;/h2&gt;
+
+&lt;p&gt;When the client reconnects:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;the server checks the inbox&lt;/li&gt;
+  &lt;li&gt;delivers any pending messages&lt;/li&gt;
+  &lt;li&gt;once the client acknowledges them, those inbox entries can be removed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That way the inbox is really just there as a delivery backlog, not the primary source of truth.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;when-the-user-is-already-online&quot;&gt;When the User Is Already Online&lt;/h2&gt;
+
+&lt;p&gt;If the user already has an active WebSocket connection:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;send the message directly&lt;/li&gt;
+  &lt;li&gt;skip the inbox path unless delivery fails&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So in my head the inbox is really for:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;offline users&lt;/li&gt;
+  &lt;li&gt;fallback when direct delivery does not succeed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;sending-attachments&quot;&gt;Sending Attachments&lt;/h2&gt;
+
+&lt;p&gt;For attachments, I would not store the actual file directly in the main database.&lt;/p&gt;
+
+&lt;p&gt;The flow I’d expect is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;user uploads an attachment&lt;/li&gt;
+  &lt;li&gt;Message Service stores the file in blob storage like S3&lt;/li&gt;
+  &lt;li&gt;the service gets back a URL or object reference&lt;/li&gt;
+  &lt;li&gt;the message record stores that reference&lt;/li&gt;
+  &lt;li&gt;clients download the attachment from blob storage&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That keeps the message path lighter and avoids pushing large binary objects into the message database.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;scaling-the-system&quot;&gt;Scaling the System&lt;/h2&gt;
+
+&lt;p&gt;At this scale, most of the services need to be horizontally scalable.&lt;/p&gt;
+
+&lt;p&gt;The parts that scale nicely are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;stateless service layer&lt;/li&gt;
+  &lt;li&gt;async workers&lt;/li&gt;
+  &lt;li&gt;storage systems that are already designed for partitioning&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The part that gets trickier is WebSockets, because WebSockets make the connection layer stateful.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;why-websockets-make-this-harder&quot;&gt;Why WebSockets Make This Harder&lt;/h2&gt;
+
+&lt;p&gt;This is where the design stopped feeling straightforward to me.&lt;/p&gt;
+
+&lt;p&gt;If:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;User A is connected to Server 1&lt;/li&gt;
+  &lt;li&gt;User B is connected to Server 2&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;and B sends a message to A, then Server 2 needs some way to get that message over to Server 1.&lt;/p&gt;
+
+&lt;p&gt;That is where I started thinking about Pub/Sub.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;pubsub-for-cross-server-routing&quot;&gt;Pub/Sub for Cross-Server Routing&lt;/h2&gt;
+
+&lt;p&gt;The way I think about it is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;each WebSocket server knows which users are connected to it&lt;/li&gt;
+  &lt;li&gt;each server subscribes to the users it is currently responsible for&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So if User B sends a message to User A:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Server 2 receives the message&lt;/li&gt;
+  &lt;li&gt;Server 2 publishes an event for User A&lt;/li&gt;
+  &lt;li&gt;Pub/Sub routes that event to Server 1&lt;/li&gt;
+  &lt;li&gt;Server 1 pushes the message to User A over the active WebSocket connection&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The simple mental model for me is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Pub/Sub handles server-to-server routing&lt;/li&gt;
+  &lt;li&gt;WebSocket handles final delivery to the client&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;handling-reconnection&quot;&gt;Handling Reconnection&lt;/h2&gt;
+
+&lt;p&gt;When a user disconnects:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;remove the active connection from the connection registry&lt;/li&gt;
+  &lt;li&gt;unsubscribe or update the server’s routing state&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;When the user reconnects:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;the load balancer routes them to some server&lt;/li&gt;
+  &lt;li&gt;that server registers the connection&lt;/li&gt;
+  &lt;li&gt;checks the inbox for missed messages&lt;/li&gt;
+  &lt;li&gt;delivers whatever is still pending&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;handling-multiple-devices&quot;&gt;Handling Multiple Devices&lt;/h2&gt;
+
+&lt;p&gt;A user may be connected on more than one device:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;phone&lt;/li&gt;
+  &lt;li&gt;laptop&lt;/li&gt;
+  &lt;li&gt;tablet&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The simplest way for me to think about that is to treat each device as its own active connection.&lt;/p&gt;
+
+&lt;p&gt;So:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;one &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt; can map to multiple active connections&lt;/li&gt;
+  &lt;li&gt;when a message arrives, it gets pushed to all active devices for that user&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That keeps the user experience consistent across devices.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;This design gives me:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;real-time delivery&lt;/li&gt;
+  &lt;li&gt;offline delivery&lt;/li&gt;
+  &lt;li&gt;horizontal scalability for most components&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But the tradeoffs are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;eventual consistency&lt;/li&gt;
+  &lt;li&gt;stateful WebSocket infrastructure&lt;/li&gt;
+  &lt;li&gt;extra complexity from Pub/Sub&lt;/li&gt;
+  &lt;li&gt;extra writes for offline inbox handling&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For this kind of system, those tradeoffs feel worth it.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-i-learned&quot;&gt;What I Learned&lt;/h2&gt;
+
+&lt;p&gt;The biggest things this made me realize were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;real-time systems force you to think a lot more about connection state&lt;/li&gt;
+  &lt;li&gt;delivery guarantees usually mean extra storage somewhere&lt;/li&gt;
+  &lt;li&gt;Pub/Sub becomes really useful once users are connected to different servers&lt;/li&gt;
+  &lt;li&gt;the hard part is not just storing the data, it is routing and delivering it correctly&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This one helped me realize that real-time systems need a pretty different mental model than normal request/response systems.&lt;/p&gt;
+
+&lt;p&gt;There is a lot more coordination involved:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;connection state&lt;/li&gt;
+  &lt;li&gt;delivery guarantees&lt;/li&gt;
+  &lt;li&gt;cross-server routing&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I’m still learning this area, but this one was a really useful problem to work through.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;future-improvements&quot;&gt;Future Improvements&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;stronger message ordering guarantees&lt;/li&gt;
+  &lt;li&gt;read receipts&lt;/li&gt;
+  &lt;li&gt;end-to-end encryption&lt;/li&gt;
+  &lt;li&gt;multi-region delivery&lt;/li&gt;
+  &lt;li&gt;per-user rate limiting&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Tue, 10 Feb 2026 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2026/02/10/whatsAppDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/02/10/whatsAppDesign.html</guid>
         
         
       </item>
