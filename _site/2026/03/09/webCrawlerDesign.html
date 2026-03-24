@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Designing a Scalable Web Crawler</title>
+  <meta name="description" content="This is my attempt at thinking through a web crawler design.">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://localhost:4000/2026/03/09/webCrawlerDesign.html">
+  <link rel="alternate" type="application/rss+xml" title="Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure" href="http://localhost:4000/feed.xml">
+</head>
+
+
+  <body>
+
+    <main class="wrapper">
+      <nav class="navigation">
+  <section class="container">
+    <a class="navigation-title" href="/">
+      <span class="title">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</span>
+    </a>
+
+    <ul class="navigation-list">
+      <li class="navigation-item">
+        <a class="navigation-link" href="/about/">About</a>
+      </li>
+    </ul>
+  </section>
+</nav>
+
+    </main>
+
+    
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Designing a Scalable Web Crawler</h1>
+    <p class="post-meta"><time datetime="2026-03-09T00:00:00-07:00" itemprop="datePublished">Mar 9, 2026</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This is my attempt at thinking through a web crawler design.</p>
+
+<p>I like this one because I’ve created this on my own before, but then once I started thinking about having to be able to handle at a large scale and with all these robots.txt restriction added since the beginning of my career as a software engineer, things got a lot harder:</p>
+
+<ul>
+  <li>URL scheduling</li>
+  <li>deduplication</li>
+  <li>retry handling</li>
+  <li>politeness</li>
+  <li>freshness</li>
+</ul>
+
+<p>This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.</p>
+
+<hr />
+
+<h2 id="initial-thought-and-why-it-stops-being-simple">Initial Thought (and why it stops being simple)</h2>
+
+<p>My first instinct was:</p>
+
+<blockquote>
+  <p>just start with some seed URLs, fetch pages, extract links, and keep going</p>
+</blockquote>
+
+<p>That is the basic loop, but it breaks down pretty quickly once you think about crawling the real web.</p>
+
+<p>The things that immediately make it harder are:</p>
+
+<ul>
+  <li>the same page can show up under multiple URLs</li>
+  <li>some pages fail temporarily</li>
+  <li>some domains should not be hit too aggressively</li>
+  <li>a page being crawled once does not mean we are done forever</li>
+</ul>
+
+<p>That was the shift for me:</p>
+
+<p>This is not just a “fetch pages” problem.</p>
+
+<p>It is really a scheduling and coordination problem.</p>
+
+<hr />
+
+<h2 id="high-level-architecture">High-Level Architecture</h2>
+
+<p><img src="/images/webCrawler-arch.png" alt="webcrawler system architecture diagram" /></p>
+
+<p>The main loop in my head is still pretty simple:</p>
+
+<ol>
+  <li>start with seed URLs</li>
+  <li>push them into a crawl queue</li>
+  <li>workers pull URLs from the queue</li>
+  <li>workers fetch pages</li>
+  <li>parse links and content</li>
+  <li>store useful data</li>
+  <li>enqueue newly discovered links</li>
+</ol>
+
+<p>But to make that work at scale, I would split the system into a few responsibilities:</p>
+
+<ul>
+  <li><strong>Crawl Queue</strong> for pending URLs</li>
+  <li><strong>Crawler Workers</strong> for fetching and parsing pages</li>
+  <li><strong>Visited URL Store</strong> to avoid crawling the exact same URL over and over</li>
+  <li><strong>Content Fingerprint Store</strong> to detect duplicate content across different URLs</li>
+  <li><strong>Domain Metadata Store</strong> to track rate limits and last access times per domain</li>
+  <li><strong>Robots Rules Store</strong> to cache <code class="language-plaintext highlighter-rouge">robots.txt</code></li>
+  <li><strong>Failure Queue</strong> for URLs that keep failing</li>
+  <li><strong>Content Storage</strong> for raw HTML or extracted text</li>
+</ul>
+
+<p>What makes this system interesting to me is that none of these parts are individually that exotic.</p>
+
+<p>The hard part is how they interact under scale.</p>
+
+<hr />
+
+<h2 id="the-basic-crawl-flow">The Basic Crawl Flow</h2>
+
+<p>If I ignore scale for a second, the happy path looks like this:</p>
+
+<ol>
+  <li>worker dequeues a URL</li>
+  <li>normalize it</li>
+  <li>check whether we have already visited it recently</li>
+  <li>check whether crawling it is allowed</li>
+  <li>fetch the page</li>
+  <li>parse out text and links</li>
+  <li>store the content</li>
+  <li>enqueue newly discovered links</li>
+  <li>mark the URL as visited</li>
+</ol>
+
+<p>That is the core loop I keep coming back to.</p>
+
+<p>Everything else in the design is basically there to make that loop safe and efficient.</p>
+
+<hr />
+
+<h2 id="deduplication">Deduplication</h2>
+
+<p>This was one of the first places where the naive version felt incomplete.</p>
+
+<p>At first I thought:</p>
+
+<blockquote>
+  <p>visited set solves duplicates</p>
+</blockquote>
+
+<p>That only solves exact URL duplication.</p>
+
+<p>But in practice the same content can show up under:</p>
+
+<ul>
+  <li>tracking parameters</li>
+  <li>printer-friendly pages</li>
+  <li>mobile vs desktop URLs</li>
+  <li>mirrored routes</li>
+</ul>
+
+<p>So I think about deduplication in two layers.</p>
+
+<h3 id="url-level-deduplication">URL-level deduplication</h3>
+
+<p>Before fetching, I would normalize URLs:</p>
+
+<ul>
+  <li>lowercase host where appropriate</li>
+  <li>remove obvious tracking params</li>
+  <li>standardize path formatting</li>
+</ul>
+
+<p>Then I would check a visited store.</p>
+
+<p>That helps avoid re-crawling the same URL shape over and over.</p>
+
+<h3 id="content-level-deduplication">Content-level deduplication</h3>
+
+<p>Even after URL normalization, different URLs can still return the same page.</p>
+
+<p>So after fetch, I would generate a content fingerprint and check whether we have already seen it.</p>
+
+<p>If the content hash already exists, I may still record that the URL was seen, but I would avoid storing or processing the full content again.</p>
+
+<p>That separation helped clarify the design for me:</p>
+
+<ul>
+  <li>URL dedupe avoids repeated fetches of the same address</li>
+  <li>content dedupe avoids repeated storage of the same page</li>
+</ul>
+
+<hr />
+
+<h2 id="retry-handling">Retry Handling</h2>
+
+<p>I do not want transient failures to make us lose pages completely.</p>
+
+<p>But I also do not want a bad URL to get retried forever.</p>
+
+<p>So the retry flow I like is:</p>
+
+<ol>
+  <li>fetch fails</li>
+  <li>increment retry count</li>
+  <li>re-enqueue with delay</li>
+  <li>if retries exceed threshold, move URL to failure queue</li>
+</ol>
+
+<p>That delay matters.</p>
+
+<p>Without it, a bunch of failing URLs can create tight retry loops and waste crawler capacity.</p>
+
+<p>For state, I would keep something simple like:</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">url -&gt; retryCount</code></li>
+</ul>
+
+<p>in a fast key-value store.</p>
+
+<p>This is one of those small details that feels boring, but it has a big effect on system stability.</p>
+
+<hr />
+
+<h2 id="politeness-and-robotstxt">Politeness and robots.txt</h2>
+
+<p>This part feels non-negotiable to me.</p>
+
+<p>A crawler that ignores <code class="language-plaintext highlighter-rouge">robots.txt</code> or hammers the same domain too fast is just badly behaved.</p>
+
+<p>So for each domain, I would want to cache:</p>
+
+<ul>
+  <li>parsed <code class="language-plaintext highlighter-rouge">robots.txt</code> rules</li>
+  <li>last access time</li>
+  <li>crawl delay</li>
+  <li>temporary backoff state if the domain is failing</li>
+</ul>
+
+<p>The flow in my head is:</p>
+
+<ol>
+  <li>first time we see a domain, fetch <code class="language-plaintext highlighter-rouge">/robots.txt</code></li>
+  <li>parse and cache the rules</li>
+  <li>before each request, check whether the path is allowed</li>
+  <li>also check whether enough time has passed since the last request to that domain</li>
+</ol>
+
+<p>If not enough time has passed, I would re-enqueue the URL with a delay instead of crawling it immediately.</p>
+
+<p>The important thing here is that politeness is not some side feature.</p>
+
+<p>It directly affects scheduling.</p>
+
+<hr />
+
+<h2 id="multiple-workers-and-the-shared-state-problem">Multiple Workers and the Shared State Problem</h2>
+
+<p>Once I start thinking about scale, this is where it gets more interesting.</p>
+
+<p>We do not crawl billions of pages with one worker.</p>
+
+<p>We need many workers pulling from a shared queue in parallel.</p>
+
+<p>That gives us throughput, but it also creates coordination problems.</p>
+
+<p>Now all workers need shared access to things like:</p>
+
+<ul>
+  <li>visited URLs</li>
+  <li>content fingerprints</li>
+  <li>domain access metadata</li>
+  <li>cached <code class="language-plaintext highlighter-rouge">robots.txt</code></li>
+</ul>
+
+<p>The domain coordination piece especially matters.</p>
+
+<p>If two workers grab two URLs from the same domain at nearly the same time, they can accidentally violate the domain rate limit unless we coordinate.</p>
+
+<p>So before a worker fetches a URL, I would want something close to an atomic check/update on domain metadata:</p>
+
+<ol>
+  <li>read domain state</li>
+  <li>verify delay requirement is satisfied</li>
+  <li>atomically update <code class="language-plaintext highlighter-rouge">lastAccessedAt</code></li>
+  <li>proceed with fetch</li>
+</ol>
+
+<p>That atomic part is what keeps politeness rules from breaking under concurrency.</p>
+
+<hr />
+
+<h2 id="scaling-to-a-very-large-crawl">Scaling to a Very Large Crawl</h2>
+
+<p>If the goal is something like crawling 10 billion pages in under 5 days, the main answer is horizontal scale.</p>
+
+<p>We add more workers and let them pull from the same crawl queue.</p>
+
+<p>That part is conceptually straightforward.</p>
+
+<p>The harder question is what becomes the bottleneck.</p>
+
+<p>The bottlenecks I would worry about most are:</p>
+
+<ul>
+  <li>duplicate checking</li>
+  <li>queue throughput</li>
+  <li>domain-level coordination</li>
+  <li>metadata reads/writes</li>
+  <li>content storage throughput</li>
+</ul>
+
+<p>So even though the workers are doing the fetching, the real scaling pressure often lands on the shared metadata layer.</p>
+
+<p>That is why I would expect a distributed key-value store or cache to be doing a lot of heavy lifting here.</p>
+
+<hr />
+
+<h2 id="freshness">Freshness</h2>
+
+<p>One thing I did not appreciate at first is that “visited” does not really mean “done forever.”</p>
+
+<p>For many crawlers, pages need to be revisited.</p>
+
+<p>Otherwise the data gets stale.</p>
+
+<p>So instead of treating the visited store as a permanent do-not-touch list, I would store something like:</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">url</code></li>
+  <li><code class="language-plaintext highlighter-rouge">hash</code></li>
+  <li><code class="language-plaintext highlighter-rouge">lastVisited</code></li>
+</ul>
+
+<p>Then when a page shows up again:</p>
+
+<ul>
+  <li>if it is still considered fresh, skip it</li>
+  <li>if it is stale, allow it to be crawled again</li>
+</ul>
+
+<p>That changes the meaning of the visited table pretty significantly.</p>
+
+<p>It is no longer just dedupe state.</p>
+
+<p>It also becomes part of recrawl scheduling.</p>
+
+<p>For stored content, the simple version I would start with is just overwriting the old copy and updating the timestamp.</p>
+
+<p>If version history matters, then I would keep multiple snapshots, but I would not start there unless the product really needs it.</p>
+
+<hr />
+
+<h2 id="data-model">Data Model</h2>
+
+<p>The rough tables / stores I picture are:</p>
+
+<h3 id="robotstxt">RobotsTxt</h3>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">domain</code></li>
+  <li><code class="language-plaintext highlighter-rouge">rules</code></li>
+</ul>
+
+<h3 id="visitedpage">VisitedPage</h3>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">url</code></li>
+  <li><code class="language-plaintext highlighter-rouge">hash</code></li>
+  <li><code class="language-plaintext highlighter-rouge">lastVisited</code></li>
+</ul>
+
+<h3 id="visitedpagebyhash">VisitedPageByHash</h3>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">hash</code></li>
+  <li><code class="language-plaintext highlighter-rouge">url</code></li>
+</ul>
+
+<h3 id="domainmetadata">DomainMetadata</h3>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">domain</code></li>
+  <li><code class="language-plaintext highlighter-rouge">lastAccessedAt</code></li>
+  <li><code class="language-plaintext highlighter-rouge">crawlDelay</code></li>
+  <li><code class="language-plaintext highlighter-rouge">backoffUntil</code></li>
+</ul>
+
+<h3 id="retrycount">RetryCount</h3>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">url</code></li>
+  <li><code class="language-plaintext highlighter-rouge">retryCount</code></li>
+</ul>
+
+<p>This is not fancy, but I like it because it maps pretty directly to the problems the crawler has to solve.</p>
+
+<hr />
+
+<h2 id="what-this-design-taught-me">What This Design Taught Me</h2>
+
+<p>The main things this design made click for me were:</p>
+
+<ul>
+  <li>a crawler is really a scheduler as much as it is a fetcher</li>
+  <li>URL duplication and content duplication are different problems</li>
+  <li>politeness rules are central to the architecture, not an afterthought</li>
+  <li>retries need delay and failure isolation or they get messy fast</li>
+  <li>freshness changes how you think about visited state</li>
+</ul>
+
+<hr />
+
+<h2 id="final-thoughts">Final Thoughts</h2>
+
+<p>A web crawler sounds simple when you first describe it:</p>
+
+<p>start with some URLs, fetch pages, extract links, repeat.</p>
+
+<p>But once I add retries, deduplication, politeness, freshness, and distributed workers, it starts feeling much more like a coordination problem than a simple scraping loop.</p>
+
+<p>That is what makes this one fun to think about.</p>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+  <div class="wrapper">
+    <div class="container">
+      <div class="row">
+        <div class="column">
+          <h2 class="footer-heading">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</h2>
+          <p class="footer-description">Notes on software engineering, backend development, and problem solving.
+</p>
+        </div>
+
+        <div class="column">
+          <ul class="social-media-list">
+            
+            <li>
+              <a href="https://github.com/dkim1116"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">dkim1116</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="https://www.linkedin.com/in/dkim1116/"><span class="icon icon--linkedin"><svg viewBox="0 0 16 16"><path fill="#828282" d="M3.02 2.455A1.12 1.12 0 1 1 .78 2.454a1.12 1.12 0 0 1 2.24 0zM.95 4.217h2.14V15.05H.95V4.217zM6.48 4.217h2.05v1.48h.03c.29-.54.98-1.67 2.4-1.67 2.56 0 3.03 1.69 3.03 3.88v7.14h-2.14V8.72c0-1.51-.03-3.45-2.1-3.45-2.1 0-2.42 1.64-2.42 3.34v6.44H6.48V4.217z"/></svg>
+</span><span class="username">LinkedIn</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="mailto:daniel.kim1116@gmail.com"><span class="icon icon--mail"><svg viewBox="0 0 512 512"><path d="M101.3 141.6v228.9h0.3 308.4 0.8V141.6H101.3zM375.7 167.8l-119.7 91.5 -119.6-91.5H375.7zM127.6 194.1l64.1 49.1 -64.1 64.1V194.1zM127.8 344.2l84.9-84.9 43.2 33.1 43-32.9 84.7 84.7L127.8 344.2 127.8 344.2zM384.4 307.8l-64.4-64.4 64.4-49.3V307.8z"/></svg></span><span class="username">daniel.kim1116@gmail.com</span></a>
+
+            </li>
+            
+          </ul>
+        </div>
+
+
+      </div>
+    </div>  
+  </div>
+</footer>
+
+
+  </body>
+
+</html>

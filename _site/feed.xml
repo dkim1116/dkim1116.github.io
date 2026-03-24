@@ -6,9 +6,802 @@
 </description>
     <link>http://localhost:4000/</link>
     <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 20 Mar 2026 20:44:34 -0700</pubDate>
-    <lastBuildDate>Fri, 20 Mar 2026 20:44:34 -0700</lastBuildDate>
+    <pubDate>Mon, 23 Mar 2026 17:52:24 -0700</pubDate>
+    <lastBuildDate>Mon, 23 Mar 2026 17:52:24 -0700</lastBuildDate>
     <generator>Jekyll v4.4.1</generator>
+    
+      <item>
+        <title>Designing a Scalable Web Crawler</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a web crawler design.&lt;/p&gt;
+
+&lt;p&gt;I like this one because I’ve created this on my own before, but then once I started thinking about having to be able to handle at a large scale and with all these robots.txt restriction added since the beginning of my career as a software engineer, things got a lot harder:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;URL scheduling&lt;/li&gt;
+  &lt;li&gt;deduplication&lt;/li&gt;
+  &lt;li&gt;retry handling&lt;/li&gt;
+  &lt;li&gt;politeness&lt;/li&gt;
+  &lt;li&gt;freshness&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;initial-thought-and-why-it-stops-being-simple&quot;&gt;Initial Thought (and why it stops being simple)&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just start with some seed URLs, fetch pages, extract links, and keep going&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That is the basic loop, but it breaks down pretty quickly once you think about crawling the real web.&lt;/p&gt;
+
+&lt;p&gt;The things that immediately make it harder are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;the same page can show up under multiple URLs&lt;/li&gt;
+  &lt;li&gt;some pages fail temporarily&lt;/li&gt;
+  &lt;li&gt;some domains should not be hit too aggressively&lt;/li&gt;
+  &lt;li&gt;a page being crawled once does not mean we are done forever&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That was the shift for me:&lt;/p&gt;
+
+&lt;p&gt;This is not just a “fetch pages” problem.&lt;/p&gt;
+
+&lt;p&gt;It is really a scheduling and coordination problem.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-architecture&quot;&gt;High-Level Architecture&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/webCrawler-arch.png&quot; alt=&quot;webcrawler system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The main loop in my head is still pretty simple:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;start with seed URLs&lt;/li&gt;
+  &lt;li&gt;push them into a crawl queue&lt;/li&gt;
+  &lt;li&gt;workers pull URLs from the queue&lt;/li&gt;
+  &lt;li&gt;workers fetch pages&lt;/li&gt;
+  &lt;li&gt;parse links and content&lt;/li&gt;
+  &lt;li&gt;store useful data&lt;/li&gt;
+  &lt;li&gt;enqueue newly discovered links&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;But to make that work at scale, I would split the system into a few responsibilities:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;Crawl Queue&lt;/strong&gt; for pending URLs&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Crawler Workers&lt;/strong&gt; for fetching and parsing pages&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Visited URL Store&lt;/strong&gt; to avoid crawling the exact same URL over and over&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Content Fingerprint Store&lt;/strong&gt; to detect duplicate content across different URLs&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Domain Metadata Store&lt;/strong&gt; to track rate limits and last access times per domain&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Robots Rules Store&lt;/strong&gt; to cache &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;robots.txt&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Failure Queue&lt;/strong&gt; for URLs that keep failing&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Content Storage&lt;/strong&gt; for raw HTML or extracted text&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;What makes this system interesting to me is that none of these parts are individually that exotic.&lt;/p&gt;
+
+&lt;p&gt;The hard part is how they interact under scale.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;the-basic-crawl-flow&quot;&gt;The Basic Crawl Flow&lt;/h2&gt;
+
+&lt;p&gt;If I ignore scale for a second, the happy path looks like this:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;worker dequeues a URL&lt;/li&gt;
+  &lt;li&gt;normalize it&lt;/li&gt;
+  &lt;li&gt;check whether we have already visited it recently&lt;/li&gt;
+  &lt;li&gt;check whether crawling it is allowed&lt;/li&gt;
+  &lt;li&gt;fetch the page&lt;/li&gt;
+  &lt;li&gt;parse out text and links&lt;/li&gt;
+  &lt;li&gt;store the content&lt;/li&gt;
+  &lt;li&gt;enqueue newly discovered links&lt;/li&gt;
+  &lt;li&gt;mark the URL as visited&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That is the core loop I keep coming back to.&lt;/p&gt;
+
+&lt;p&gt;Everything else in the design is basically there to make that loop safe and efficient.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;deduplication&quot;&gt;Deduplication&lt;/h2&gt;
+
+&lt;p&gt;This was one of the first places where the naive version felt incomplete.&lt;/p&gt;
+
+&lt;p&gt;At first I thought:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;visited set solves duplicates&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That only solves exact URL duplication.&lt;/p&gt;
+
+&lt;p&gt;But in practice the same content can show up under:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;tracking parameters&lt;/li&gt;
+  &lt;li&gt;printer-friendly pages&lt;/li&gt;
+  &lt;li&gt;mobile vs desktop URLs&lt;/li&gt;
+  &lt;li&gt;mirrored routes&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So I think about deduplication in two layers.&lt;/p&gt;
+
+&lt;h3 id=&quot;url-level-deduplication&quot;&gt;URL-level deduplication&lt;/h3&gt;
+
+&lt;p&gt;Before fetching, I would normalize URLs:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;lowercase host where appropriate&lt;/li&gt;
+  &lt;li&gt;remove obvious tracking params&lt;/li&gt;
+  &lt;li&gt;standardize path formatting&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Then I would check a visited store.&lt;/p&gt;
+
+&lt;p&gt;That helps avoid re-crawling the same URL shape over and over.&lt;/p&gt;
+
+&lt;h3 id=&quot;content-level-deduplication&quot;&gt;Content-level deduplication&lt;/h3&gt;
+
+&lt;p&gt;Even after URL normalization, different URLs can still return the same page.&lt;/p&gt;
+
+&lt;p&gt;So after fetch, I would generate a content fingerprint and check whether we have already seen it.&lt;/p&gt;
+
+&lt;p&gt;If the content hash already exists, I may still record that the URL was seen, but I would avoid storing or processing the full content again.&lt;/p&gt;
+
+&lt;p&gt;That separation helped clarify the design for me:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;URL dedupe avoids repeated fetches of the same address&lt;/li&gt;
+  &lt;li&gt;content dedupe avoids repeated storage of the same page&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;retry-handling&quot;&gt;Retry Handling&lt;/h2&gt;
+
+&lt;p&gt;I do not want transient failures to make us lose pages completely.&lt;/p&gt;
+
+&lt;p&gt;But I also do not want a bad URL to get retried forever.&lt;/p&gt;
+
+&lt;p&gt;So the retry flow I like is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;fetch fails&lt;/li&gt;
+  &lt;li&gt;increment retry count&lt;/li&gt;
+  &lt;li&gt;re-enqueue with delay&lt;/li&gt;
+  &lt;li&gt;if retries exceed threshold, move URL to failure queue&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That delay matters.&lt;/p&gt;
+
+&lt;p&gt;Without it, a bunch of failing URLs can create tight retry loops and waste crawler capacity.&lt;/p&gt;
+
+&lt;p&gt;For state, I would keep something simple like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;url -&amp;gt; retryCount&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;in a fast key-value store.&lt;/p&gt;
+
+&lt;p&gt;This is one of those small details that feels boring, but it has a big effect on system stability.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;politeness-and-robotstxt&quot;&gt;Politeness and robots.txt&lt;/h2&gt;
+
+&lt;p&gt;This part feels non-negotiable to me.&lt;/p&gt;
+
+&lt;p&gt;A crawler that ignores &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;robots.txt&lt;/code&gt; or hammers the same domain too fast is just badly behaved.&lt;/p&gt;
+
+&lt;p&gt;So for each domain, I would want to cache:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;parsed &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;robots.txt&lt;/code&gt; rules&lt;/li&gt;
+  &lt;li&gt;last access time&lt;/li&gt;
+  &lt;li&gt;crawl delay&lt;/li&gt;
+  &lt;li&gt;temporary backoff state if the domain is failing&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The flow in my head is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;first time we see a domain, fetch &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/robots.txt&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;parse and cache the rules&lt;/li&gt;
+  &lt;li&gt;before each request, check whether the path is allowed&lt;/li&gt;
+  &lt;li&gt;also check whether enough time has passed since the last request to that domain&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;If not enough time has passed, I would re-enqueue the URL with a delay instead of crawling it immediately.&lt;/p&gt;
+
+&lt;p&gt;The important thing here is that politeness is not some side feature.&lt;/p&gt;
+
+&lt;p&gt;It directly affects scheduling.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;multiple-workers-and-the-shared-state-problem&quot;&gt;Multiple Workers and the Shared State Problem&lt;/h2&gt;
+
+&lt;p&gt;Once I start thinking about scale, this is where it gets more interesting.&lt;/p&gt;
+
+&lt;p&gt;We do not crawl billions of pages with one worker.&lt;/p&gt;
+
+&lt;p&gt;We need many workers pulling from a shared queue in parallel.&lt;/p&gt;
+
+&lt;p&gt;That gives us throughput, but it also creates coordination problems.&lt;/p&gt;
+
+&lt;p&gt;Now all workers need shared access to things like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;visited URLs&lt;/li&gt;
+  &lt;li&gt;content fingerprints&lt;/li&gt;
+  &lt;li&gt;domain access metadata&lt;/li&gt;
+  &lt;li&gt;cached &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;robots.txt&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The domain coordination piece especially matters.&lt;/p&gt;
+
+&lt;p&gt;If two workers grab two URLs from the same domain at nearly the same time, they can accidentally violate the domain rate limit unless we coordinate.&lt;/p&gt;
+
+&lt;p&gt;So before a worker fetches a URL, I would want something close to an atomic check/update on domain metadata:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;read domain state&lt;/li&gt;
+  &lt;li&gt;verify delay requirement is satisfied&lt;/li&gt;
+  &lt;li&gt;atomically update &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lastAccessedAt&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;proceed with fetch&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That atomic part is what keeps politeness rules from breaking under concurrency.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;scaling-to-a-very-large-crawl&quot;&gt;Scaling to a Very Large Crawl&lt;/h2&gt;
+
+&lt;p&gt;If the goal is something like crawling 10 billion pages in under 5 days, the main answer is horizontal scale.&lt;/p&gt;
+
+&lt;p&gt;We add more workers and let them pull from the same crawl queue.&lt;/p&gt;
+
+&lt;p&gt;That part is conceptually straightforward.&lt;/p&gt;
+
+&lt;p&gt;The harder question is what becomes the bottleneck.&lt;/p&gt;
+
+&lt;p&gt;The bottlenecks I would worry about most are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;duplicate checking&lt;/li&gt;
+  &lt;li&gt;queue throughput&lt;/li&gt;
+  &lt;li&gt;domain-level coordination&lt;/li&gt;
+  &lt;li&gt;metadata reads/writes&lt;/li&gt;
+  &lt;li&gt;content storage throughput&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So even though the workers are doing the fetching, the real scaling pressure often lands on the shared metadata layer.&lt;/p&gt;
+
+&lt;p&gt;That is why I would expect a distributed key-value store or cache to be doing a lot of heavy lifting here.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;freshness&quot;&gt;Freshness&lt;/h2&gt;
+
+&lt;p&gt;One thing I did not appreciate at first is that “visited” does not really mean “done forever.”&lt;/p&gt;
+
+&lt;p&gt;For many crawlers, pages need to be revisited.&lt;/p&gt;
+
+&lt;p&gt;Otherwise the data gets stale.&lt;/p&gt;
+
+&lt;p&gt;So instead of treating the visited store as a permanent do-not-touch list, I would store something like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;url&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;hash&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lastVisited&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Then when a page shows up again:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;if it is still considered fresh, skip it&lt;/li&gt;
+  &lt;li&gt;if it is stale, allow it to be crawled again&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That changes the meaning of the visited table pretty significantly.&lt;/p&gt;
+
+&lt;p&gt;It is no longer just dedupe state.&lt;/p&gt;
+
+&lt;p&gt;It also becomes part of recrawl scheduling.&lt;/p&gt;
+
+&lt;p&gt;For stored content, the simple version I would start with is just overwriting the old copy and updating the timestamp.&lt;/p&gt;
+
+&lt;p&gt;If version history matters, then I would keep multiple snapshots, but I would not start there unless the product really needs it.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;data-model&quot;&gt;Data Model&lt;/h2&gt;
+
+&lt;p&gt;The rough tables / stores I picture are:&lt;/p&gt;
+
+&lt;h3 id=&quot;robotstxt&quot;&gt;RobotsTxt&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;domain&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rules&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;visitedpage&quot;&gt;VisitedPage&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;url&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;hash&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lastVisited&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;visitedpagebyhash&quot;&gt;VisitedPageByHash&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;hash&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;url&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;domainmetadata&quot;&gt;DomainMetadata&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;domain&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lastAccessedAt&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;crawlDelay&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;backoffUntil&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;retrycount&quot;&gt;RetryCount&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;url&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;retryCount&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is not fancy, but I like it because it maps pretty directly to the problems the crawler has to solve.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-this-design-taught-me&quot;&gt;What This Design Taught Me&lt;/h2&gt;
+
+&lt;p&gt;The main things this design made click for me were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;a crawler is really a scheduler as much as it is a fetcher&lt;/li&gt;
+  &lt;li&gt;URL duplication and content duplication are different problems&lt;/li&gt;
+  &lt;li&gt;politeness rules are central to the architecture, not an afterthought&lt;/li&gt;
+  &lt;li&gt;retries need delay and failure isolation or they get messy fast&lt;/li&gt;
+  &lt;li&gt;freshness changes how you think about visited state&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;A web crawler sounds simple when you first describe it:&lt;/p&gt;
+
+&lt;p&gt;start with some URLs, fetch pages, extract links, repeat.&lt;/p&gt;
+
+&lt;p&gt;But once I add retries, deduplication, politeness, freshness, and distributed workers, it starts feeling much more like a coordination problem than a simple scraping loop.&lt;/p&gt;
+
+&lt;p&gt;That is what makes this one fun to think about.&lt;/p&gt;
+</description>
+        <pubDate>Mon, 09 Mar 2026 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2026/03/09/webCrawlerDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/09/webCrawlerDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Designing a Ticketmaster-like System</title>
+        <description>&lt;p&gt;This is my attempt at thinking through a Ticketmaster-like system.&lt;/p&gt;
+
+&lt;p&gt;I like this one because it forces you to think about two very different problems at the same time:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;event search&lt;/li&gt;
+  &lt;li&gt;real-time seat selection&lt;/li&gt;
+  &lt;li&gt;correctness under insane traffic spikes&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;What makes this system interesting to me is that most of the hard part is not really CRUD. It is mostly about contention, temporary state, and making sure two people do not think they bought the same seat.&lt;/p&gt;
+
+&lt;p&gt;This is not meant to be a perfect design. These are basically my notes on how I would reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;initial-thought-and-where-it-gets-tricky&quot;&gt;Initial Thought (and where it gets tricky)&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just store events and tickets in a database, then update a seat row when someone books&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That sounds fine until you picture a high-demand concert.&lt;/p&gt;
+
+&lt;p&gt;Now thousands or millions of people may be refreshing the same event page, clicking the same few seats, and trying to check out at nearly the same time.&lt;/p&gt;
+
+&lt;p&gt;That was the shift for me:&lt;/p&gt;
+
+&lt;p&gt;This is not just an event catalog problem. It is a concurrency-control problem.&lt;/p&gt;
+
+&lt;p&gt;Once I started looking at it that way, the design felt more like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;search and browsing on one side&lt;/li&gt;
+  &lt;li&gt;seat reservation and booking correctness on the other&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-architecture&quot;&gt;High-Level Architecture&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/ticketmaster-arch.png&quot; alt=&quot;ticketMaster system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The biggest thing shaping my design is that reads and writes want very different things here.&lt;/p&gt;
+
+&lt;p&gt;For browsing and search, I want:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;low latency&lt;/li&gt;
+  &lt;li&gt;lots of horizontal scale&lt;/li&gt;
+  &lt;li&gt;caching wherever it helps&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For booking, I care much more about:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;correctness&lt;/li&gt;
+  &lt;li&gt;preventing double booking&lt;/li&gt;
+  &lt;li&gt;handling temporary holds safely&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So in my head I split the system into a few responsibilities:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;Event Service&lt;/strong&gt; for event metadata and details&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Search Service&lt;/strong&gt; for discovery queries&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Booking Service&lt;/strong&gt; for seat holds and checkout&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Redis&lt;/strong&gt; for short-lived reservation state&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;SQL DB&lt;/strong&gt; as the source of truth for events, tickets, and bookings&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;viewing-event-details&quot;&gt;Viewing Event Details&lt;/h2&gt;
+
+&lt;p&gt;The easy path is just viewing a specific event.&lt;/p&gt;
+
+&lt;p&gt;That flow in my head is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;client sends &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET /events/{eventId}&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;request goes through API Gateway&lt;/li&gt;
+  &lt;li&gt;gateway routes to Event Service&lt;/li&gt;
+  &lt;li&gt;Event Service reads from the Events database&lt;/li&gt;
+  &lt;li&gt;event details come back to the client&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;This part is pretty standard. The main thing I would care about is caching hot events because popular pages are going to get hammered.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;searching-for-events&quot;&gt;Searching for Events&lt;/h2&gt;
+
+&lt;p&gt;At first I thought maybe search could just live in the same service as event reads.&lt;/p&gt;
+
+&lt;p&gt;I do not really like that after thinking about it more.&lt;/p&gt;
+
+&lt;p&gt;Search has different access patterns:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;text search&lt;/li&gt;
+  &lt;li&gt;filtering by category, city, date&lt;/li&gt;
+  &lt;li&gt;ranking and relevance&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So I would separate it into a Search Service.&lt;/p&gt;
+
+&lt;p&gt;For a simpler version, you could query indexed fields in a relational database. But once queries start looking more like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;“Drake concert in LA”&lt;/li&gt;
+  &lt;li&gt;“NBA games this weekend”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;it starts feeling more like a search engine problem than a plain database lookup.&lt;/p&gt;
+
+&lt;p&gt;That is why I would keep Search Service logically separate from Event Service. It gives you better scalability and lets you optimize search independently.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;booking-seats&quot;&gt;Booking Seats&lt;/h2&gt;
+
+&lt;p&gt;This is where the design gets interesting.&lt;/p&gt;
+
+&lt;p&gt;The user flow is roughly:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;user opens event page&lt;/li&gt;
+  &lt;li&gt;client loads event details, seat map, and currently available tickets&lt;/li&gt;
+  &lt;li&gt;user selects seats&lt;/li&gt;
+  &lt;li&gt;client sends booking request&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The important thing is that “seat available when page loaded” does not mean “seat still available when checkout starts.”&lt;/p&gt;
+
+&lt;p&gt;So the Booking Service cannot trust the client. It has to re-check availability at the moment of reservation.&lt;/p&gt;
+
+&lt;p&gt;If the seat is already taken or on hold, reject it.&lt;/p&gt;
+
+&lt;p&gt;If it is still available, move it into a temporary reserved state first rather than marking it permanently sold immediately.&lt;/p&gt;
+
+&lt;p&gt;That temporary state is the key idea for this whole system.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;two-phase-booking&quot;&gt;Two-Phase Booking&lt;/h2&gt;
+
+&lt;p&gt;The part I kept coming back to was: how do we stop users from losing seats mid-checkout without permanently locking inventory?&lt;/p&gt;
+
+&lt;p&gt;The model that makes the most sense to me is two-phase booking.&lt;/p&gt;
+
+&lt;h3 id=&quot;phase-1-hold-the-seat&quot;&gt;Phase 1: Hold the seat&lt;/h3&gt;
+
+&lt;p&gt;When a user selects a seat and starts checkout:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;store the hold in Redis&lt;/li&gt;
+  &lt;li&gt;attach a TTL like 10 minutes&lt;/li&gt;
+  &lt;li&gt;mark that seat as temporarily unavailable&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I like Redis here because this is short-lived state. It is fast, and expiration is built into the model.&lt;/p&gt;
+
+&lt;h3 id=&quot;phase-2-confirm-the-booking&quot;&gt;Phase 2: Confirm the booking&lt;/h3&gt;
+
+&lt;p&gt;If payment succeeds:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;remove the hold&lt;/li&gt;
+  &lt;li&gt;mark the ticket as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SOLD&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;create the booking record in the database&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;If payment never completes:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;TTL expires&lt;/li&gt;
+  &lt;li&gt;hold disappears&lt;/li&gt;
+  &lt;li&gt;seat becomes available again&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That feels like the right tradeoff to me because we preserve correctness without forcing abandoned carts to lock seats forever.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;read-path-for-availability&quot;&gt;Read Path for Availability&lt;/h2&gt;
+
+&lt;p&gt;One subtle thing here is that available seats are not just whatever the database says is unsold.&lt;/p&gt;
+
+&lt;p&gt;You also have to account for seats currently on hold.&lt;/p&gt;
+
+&lt;p&gt;So when the client asks for available seats, the system should roughly:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;read unsold tickets from the database&lt;/li&gt;
+  &lt;li&gt;subtract seats currently held in Redis&lt;/li&gt;
+  &lt;li&gt;return the filtered result&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That way the UI reflects both permanent sales and temporary reservations.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;failure-handling&quot;&gt;Failure Handling&lt;/h2&gt;
+
+&lt;p&gt;One obvious failure mode is:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;what if the hold service crashes and seats get stuck?&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That is why I would want Redis set up with replication and failover, not as a single fragile node.&lt;/p&gt;
+
+&lt;p&gt;But even more importantly, the TTL is doing a lot of safety work here.&lt;/p&gt;
+
+&lt;p&gt;Even if something goes wrong, the hold should not live forever.&lt;/p&gt;
+
+&lt;p&gt;That is one of the reasons I like expiration-based temporary state for this kind of problem.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;scaling-reads&quot;&gt;Scaling Reads&lt;/h2&gt;
+
+&lt;p&gt;The read side could get huge for a major event.&lt;/p&gt;
+
+&lt;p&gt;If millions of users are browsing event pages and seat maps, I would want to scale that path aggressively:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;load balancer in front of services&lt;/li&gt;
+  &lt;li&gt;horizontally scaled Event Service instances&lt;/li&gt;
+  &lt;li&gt;in-memory caching for hot events&lt;/li&gt;
+  &lt;li&gt;potentially sharded event/ticket data if the dataset gets large enough&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is one of those systems where the read traffic and write traffic behave very differently.&lt;/p&gt;
+
+&lt;p&gt;Reads want scale and caching.&lt;/p&gt;
+
+&lt;p&gt;Writes want careful coordination.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;sharding-tradeoffs&quot;&gt;Sharding Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;If I had to shard event data, my first thought would be to shard by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;eventId&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;That gives you a pretty natural distribution for reads and writes tied to one specific event.&lt;/p&gt;
+
+&lt;p&gt;The downside is that it is not great for cross-event queries like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;events in San Francisco&lt;/li&gt;
+  &lt;li&gt;comedy shows this weekend&lt;/li&gt;
+  &lt;li&gt;concerts by category&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That is another reason I would not rely on the main relational database alone for discovery queries.&lt;/p&gt;
+
+&lt;p&gt;Sharding by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;eventId&lt;/code&gt; helps operationally, but it does not solve search.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;search-improvements&quot;&gt;Search Improvements&lt;/h2&gt;
+
+&lt;p&gt;If the product needs richer discovery, I would introduce Elasticsearch.&lt;/p&gt;
+
+&lt;p&gt;That helps with:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;full-text search&lt;/li&gt;
+  &lt;li&gt;filtering by category, location, date&lt;/li&gt;
+  &lt;li&gt;ranking by relevance&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The mental split I have is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;SQL DB for correctness and transactional data&lt;/li&gt;
+  &lt;li&gt;Elasticsearch for fast discovery&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That is very similar to how I think about the Yelp design too. The main database should not be forced to do every job.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;real-time-seat-updates&quot;&gt;Real-Time Seat Updates&lt;/h2&gt;
+
+&lt;p&gt;Another thing that matters here is making the seat map feel live.&lt;/p&gt;
+
+&lt;p&gt;If one user grabs a seat, other users should see that change quickly.&lt;/p&gt;
+
+&lt;p&gt;The two obvious options are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;WebSockets&lt;/li&gt;
+  &lt;li&gt;Server-Sent Events (SSE)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;My default choice would probably be SSE if the main requirement is just one-way seat updates from server to client.&lt;/p&gt;
+
+&lt;p&gt;That feels simpler than full WebSockets while still giving users a real-time view of what is disappearing.&lt;/p&gt;
+
+&lt;p&gt;The flow would be something like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Booking Service changes seat state&lt;/li&gt;
+  &lt;li&gt;server emits update event&lt;/li&gt;
+  &lt;li&gt;connected clients refresh those seats in the UI&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;virtual-waiting-room&quot;&gt;Virtual Waiting Room&lt;/h2&gt;
+
+&lt;p&gt;This is the other big idea that feels necessary for really hot events.&lt;/p&gt;
+
+&lt;p&gt;Without a waiting room, the booking system can get overwhelmed instantly, and even if the backend survives, the user experience becomes chaos.&lt;/p&gt;
+
+&lt;p&gt;So I would add a queue in front of the booking flow for high-demand events.&lt;/p&gt;
+
+&lt;p&gt;In my head the flow is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;users enter queue with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;eventId&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;sessionId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;queue orders them fairly&lt;/li&gt;
+  &lt;li&gt;only a limited number of users are allowed into active booking at once&lt;/li&gt;
+  &lt;li&gt;when users finish or abandon the flow, the next users are admitted&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;You could implement that with Redis, Kafka, SQS, or something similar depending on how much control you want.&lt;/p&gt;
+
+&lt;p&gt;The important part is not the exact tool. It is the admission control.&lt;/p&gt;
+
+&lt;p&gt;That is what protects the booking path from turning into a thundering herd problem.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;The tradeoffs I keep landing on are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Redis holds add extra system complexity&lt;/li&gt;
+  &lt;li&gt;search becomes eventually consistent if Elasticsearch is introduced&lt;/li&gt;
+  &lt;li&gt;real-time updates and waiting rooms add operational overhead&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But the upside is worth it:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;better user experience during spikes&lt;/li&gt;
+  &lt;li&gt;much lower chance of double booking&lt;/li&gt;
+  &lt;li&gt;cleaner separation between browsing scale and booking correctness&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-i-learned&quot;&gt;What I Learned&lt;/h2&gt;
+
+&lt;p&gt;The biggest things this design reinforced for me were:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;the hardest part is not storing tickets, it is coordinating access to them&lt;/li&gt;
+  &lt;li&gt;temporary state matters a lot in booking systems&lt;/li&gt;
+  &lt;li&gt;high-scale reads and correctness-sensitive writes usually want different architectures&lt;/li&gt;
+  &lt;li&gt;fairness mechanisms like waiting rooms are part of system design, not just product polish&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;What I like about this problem is that it forces you to care about state transitions.&lt;/p&gt;
+
+&lt;p&gt;A seat is not just available or sold.&lt;/p&gt;
+
+&lt;p&gt;It may be:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;available&lt;/li&gt;
+  &lt;li&gt;on hold&lt;/li&gt;
+  &lt;li&gt;sold&lt;/li&gt;
+  &lt;li&gt;released after timeout&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That is what makes the design interesting to me.&lt;/p&gt;
+
+&lt;p&gt;Once I started viewing it as a system for managing contested state under load, the architecture made a lot more sense.&lt;/p&gt;
+</description>
+        <pubDate>Thu, 05 Mar 2026 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2026/03/05/ticketMasterDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/05/ticketMasterDesign.html</guid>
+        
+        
+      </item>
     
       <item>
         <title>Designing a Yelp-like System</title>
@@ -333,9 +1126,9 @@ avgRating = ratingSum / reviewCount
 
 &lt;hr /&gt;
 </description>
-        <pubDate>Fri, 20 Mar 2026 00:00:00 -0700</pubDate>
-        <link>http://localhost:4000/2026/03/20/yelpSystemDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/03/20/yelpSystemDesign.html</guid>
+        <pubDate>Tue, 24 Feb 2026 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2026/02/24/yelpSystemDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/02/24/yelpSystemDesign.html</guid>
         
         
       </item>
