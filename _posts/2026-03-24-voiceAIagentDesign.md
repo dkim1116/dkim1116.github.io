@@ -3,18 +3,7 @@ layout: post
 title: "Designing a Real-Time Voice AI Platform"
 ---
 
-This is my attempt at designing a voice AI agent system.
-
-I wanted to think through what it would take to build something that can talk to a user in real time, not just generate text.
-
-At a super high-level, I was just thinking:
-> stream audio in, process it, and stream audio back
-
-That sounds simple enough at first.
-
-But once I started thinking about latency, concurrency, and reliability at scale, it turned into a very different kind of problem.
-
-What makes this one interesting to me is that it is all of these at once:
+In this post, I walk through a AI voice agent design based on the architecture below. The voice communication system supports:
 - real-time
 - stateful
 - highly concurrent
@@ -68,6 +57,7 @@ It is a coordination problem under real-time constraints.
 ---
 
 ## High-Level Architecture
+<img src="{{ '/images/voiceAgentArch.png' | relative_url }}" alt="AI voice agent system architecture diagram">
 
 The basic loop still looks simple:
 
@@ -78,14 +68,14 @@ The basic loop still looks simple:
 
 To make that work at scale, I would break the system into a few layers:
 
-- **Edge Layer** (load balancing, routing)
-- **Ingestion / Session Gateway**
-- **Processing Pipeline**
+**Edge Layer** (load balancing, routing)
+**Ingestion / Session Gateway**
+**Processing Pipeline**
   - speech-to-text (STT)
   - orchestration / LLM
   - text-to-speech (TTS)
-- **Response Streaming Layer**
-- **Async Systems** (logging, billing, analytics)
+**Response Streaming Layer**
+**Async Systems** (logging, billing, analytics)
 
 The ingestion layer is the part I keep coming back to because it acts like the bridge between the client connection and the rest of the platform.
 
@@ -238,19 +228,19 @@ My guess is that the processing / inference layer becomes the main bottleneck mo
 
 ## Tradeoffs
 
-- **WebSockets vs gRPC**  
+**WebSockets vs gRPC**  
   ease of use vs performance  
 
-- **Streaming vs queues**  
+**Streaming vs queues**  
   low latency vs decoupling  
 
-- **Stateless vs stateful**  
+**Stateless vs stateful**  
   scalability vs session continuity  
 
-- **Fast reconnect vs seamless failover**  
+**Fast reconnect vs seamless failover**  
   simplicity vs user experience  
 
-- **Multi-region vs complexity**  
+**Multi-region vs complexity**  
   lower latency vs operational overhead  
 
 ---
@@ -278,6 +268,4 @@ But the deeper I went, the more it became about:
 - handling backpressure  
 - scaling under real-time constraints  
 
-That is what makes it hard.
-
-But honestly, that is also what makes it fun to think through.
+That is my first design dealing with an AI agent. Lots of improvements to be made here. Stay tuned.

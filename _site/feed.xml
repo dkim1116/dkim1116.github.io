@@ -6,9 +6,778 @@
 </description>
     <link>http://localhost:4000/</link>
     <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 23 Mar 2026 17:52:24 -0700</pubDate>
-    <lastBuildDate>Mon, 23 Mar 2026 17:52:24 -0700</lastBuildDate>
+    <pubDate>Thu, 26 Mar 2026 15:59:53 -0700</pubDate>
+    <lastBuildDate>Thu, 26 Mar 2026 15:59:53 -0700</lastBuildDate>
     <generator>Jekyll v4.4.1</generator>
+    
+      <item>
+        <title>Designing a Real-Time Voice AI Platform</title>
+        <description>&lt;p&gt;In this post, I walk through a AI voice agent design based on the architecture below. The voice communication system supports:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;real-time&lt;/li&gt;
+  &lt;li&gt;stateful&lt;/li&gt;
+  &lt;li&gt;highly concurrent&lt;/li&gt;
+  &lt;li&gt;sensitive to even small delays&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-i-want-the-system-to-do&quot;&gt;What I Want the System to Do&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;users can start and end a voice session&lt;/li&gt;
+  &lt;li&gt;clients can continuously stream audio to the platform&lt;/li&gt;
+  &lt;li&gt;system processes audio and generates a response&lt;/li&gt;
+  &lt;li&gt;system streams audio response back to the client&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-matters-most&quot;&gt;What Matters Most&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;low latency (&amp;lt; 1 second e2e)&lt;/li&gt;
+  &lt;li&gt;high concurrency (handle millions of calls simultaneously)&lt;/li&gt;
+  &lt;li&gt;high availability&lt;/li&gt;
+  &lt;li&gt;horizontal scalability&lt;/li&gt;
+  &lt;li&gt;observability (latency, throughput, error rates)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Latency feels especially important here because even small delays can break the illusion of a real-time conversation.&lt;/p&gt;
+
+&lt;p&gt;If the system answers correctly but too slowly, the UX will still be bad.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;initial-thought-and-why-it-breaks&quot;&gt;Initial Thought (and why it breaks)&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;just open a connection, stream audio, process it, and return a response&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That works conceptually, but breaks down quickly when you consider:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;audio arrives continuously (not in batches)&lt;/li&gt;
+  &lt;li&gt;many users are connected at the same time&lt;/li&gt;
+  &lt;li&gt;processing takes a lot of time (STT, LLM, TTS)&lt;/li&gt;
+  &lt;li&gt;failures can happen mid-call&lt;/li&gt;
+  &lt;li&gt;latency accumulates across multiple stages&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is not just a processing problem.&lt;/p&gt;
+
+&lt;p&gt;It is a coordination problem under real-time constraints.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-architecture&quot;&gt;High-Level Architecture&lt;/h2&gt;
+&lt;p&gt;&lt;img src=&quot;/images/voiceAgentArch.png&quot; alt=&quot;AI voice agent system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The basic loop still looks simple:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;client opens a session&lt;/li&gt;
+  &lt;li&gt;client streams audio&lt;/li&gt;
+  &lt;li&gt;system processes audio&lt;/li&gt;
+  &lt;li&gt;system streams response back&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;To make that work at scale, I would break the system into a few layers:&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Edge Layer&lt;/strong&gt; (load balancing, routing)
+&lt;strong&gt;Ingestion / Session Gateway&lt;/strong&gt;
+&lt;strong&gt;Processing Pipeline&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;speech-to-text (STT)&lt;/li&gt;
+  &lt;li&gt;orchestration / LLM&lt;/li&gt;
+  &lt;li&gt;text-to-speech (TTS)
+&lt;strong&gt;Response Streaming Layer&lt;/strong&gt;
+&lt;strong&gt;Async Systems&lt;/strong&gt; (logging, billing, analytics)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The ingestion layer is the part I keep coming back to because it acts like the bridge between the client connection and the rest of the platform.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;data-flow&quot;&gt;Data Flow&lt;/h2&gt;
+
+&lt;p&gt;A typical call would look like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;client creates a session&lt;/li&gt;
+  &lt;li&gt;client opens a persistent WebSocket connection&lt;/li&gt;
+  &lt;li&gt;client streams audio chunks continuously&lt;/li&gt;
+  &lt;li&gt;ingestion layer receives and routes audio by session&lt;/li&gt;
+  &lt;li&gt;STT converts audio into text&lt;/li&gt;
+  &lt;li&gt;LLM generates a response&lt;/li&gt;
+  &lt;li&gt;TTS converts response text into audio&lt;/li&gt;
+  &lt;li&gt;audio is streamed back to the client&lt;/li&gt;
+  &lt;li&gt;usage and logging events are emitted asynchronously&lt;/li&gt;
+  &lt;li&gt;session ends and resources are cleaned up&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;deep-dives&quot;&gt;Deep Dives&lt;/h2&gt;
+
+&lt;h3 id=&quot;latency&quot;&gt;Latency&lt;/h3&gt;
+
+&lt;p&gt;This is the first thing I would worry about.&lt;/p&gt;
+
+&lt;p&gt;Latency comes from a bunch of places:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;network hops&lt;/li&gt;
+  &lt;li&gt;buffering&lt;/li&gt;
+  &lt;li&gt;model inference&lt;/li&gt;
+  &lt;li&gt;response generation&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;To keep latency low:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use persistent streaming connections instead of request/response&lt;/li&gt;
+  &lt;li&gt;avoid unnecessary buffering&lt;/li&gt;
+  &lt;li&gt;minimize hops in the hot path&lt;/li&gt;
+  &lt;li&gt;stream partial responses when possible&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;One thing that stood out to me here is that queues are useful in a lot of backend systems, but I would be careful about putting them directly in the real-time path.&lt;/p&gt;
+
+&lt;p&gt;They help with decoupling, but they can also quietly add delay.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h3 id=&quot;scaling&quot;&gt;Scaling&lt;/h3&gt;
+
+&lt;p&gt;Each call should be treated as an independent session.&lt;/p&gt;
+
+&lt;p&gt;That gives me a cleaner mental model:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;horizontal scaling across ingestion nodes&lt;/li&gt;
+  &lt;li&gt;distribution of sessions across regions&lt;/li&gt;
+  &lt;li&gt;independent scaling of processing layers&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;For global scale:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;deploy across multiple regions&lt;/li&gt;
+  &lt;li&gt;route users to the nearest healthy region&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h3 id=&quot;backpressure&quot;&gt;Backpressure&lt;/h3&gt;
+
+&lt;p&gt;If processing falls behind:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;data starts piling up&lt;/li&gt;
+  &lt;li&gt;latency increases&lt;/li&gt;
+  &lt;li&gt;responses become useless&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;To handle this:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;use bounded buffers&lt;/li&gt;
+  &lt;li&gt;monitor lag between stages&lt;/li&gt;
+  &lt;li&gt;throttle intake if necessary&lt;/li&gt;
+  &lt;li&gt;shed load when overloaded&lt;/li&gt;
+  &lt;li&gt;autoscale the bottleneck layer&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This part feels really important because delayed responses are almost as bad as failed responses in a voice system.&lt;/p&gt;
+
+&lt;p&gt;The goal is to stop small slowdowns from turning into a pileup the whole system cannot recover from.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h3 id=&quot;failure-handling&quot;&gt;Failure Handling&lt;/h3&gt;
+
+&lt;p&gt;If a node fails mid-call:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;client should reconnect to a healthy node&lt;/li&gt;
+  &lt;li&gt;system resumes from recent recoverable state if possible&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Tradeoff:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;seamless failover is complex&lt;/li&gt;
+  &lt;li&gt;fast reconnect is simpler and often sufficient&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I would probably prioritize fast recovery over perfect handoff.&lt;/p&gt;
+
+&lt;p&gt;Perfect continuity sounds nice, but it adds a lot of complexity very quickly.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h3 id=&quot;protocol-choices&quot;&gt;Protocol Choices&lt;/h3&gt;
+
+&lt;p&gt;Both WebSockets and gRPC support streaming.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;WebSockets are better for client connections (especially browsers as they natively support it)&lt;/li&gt;
+  &lt;li&gt;gRPC is better for internal service-to-service communication&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;A common pattern:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;WebSockets at the edge&lt;/li&gt;
+  &lt;li&gt;gRPC internally&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h3 id=&quot;state-management&quot;&gt;State Management&lt;/h3&gt;
+
+&lt;p&gt;Not all state needs to be preserved.&lt;/p&gt;
+
+&lt;p&gt;My first instinct is to keep only the minimum session state I really need:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;session ID&lt;/li&gt;
+  &lt;li&gt;recent transcript&lt;/li&gt;
+  &lt;li&gt;current processing stage&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Tradeoff:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;more state = better recovery&lt;/li&gt;
+  &lt;li&gt;more state = more complexity&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;bottlenecks&quot;&gt;Bottlenecks&lt;/h2&gt;
+
+&lt;p&gt;The most likely bottlenecks are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;number of active connections per ingestion node&lt;/li&gt;
+  &lt;li&gt;network bandwidth&lt;/li&gt;
+  &lt;li&gt;inference capacity (CPU/GPU)&lt;/li&gt;
+  &lt;li&gt;queue buildup between stages&lt;/li&gt;
+  &lt;li&gt;shared metadata stores&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;My guess is that the processing / inference layer becomes the main bottleneck most of the time, especially once the system gets enough traffic.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;&lt;strong&gt;WebSockets vs gRPC&lt;/strong&gt;&lt;br /&gt;
+  ease of use vs performance&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Streaming vs queues&lt;/strong&gt;&lt;br /&gt;
+  low latency vs decoupling&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Stateless vs stateful&lt;/strong&gt;&lt;br /&gt;
+  scalability vs session continuity&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Fast reconnect vs seamless failover&lt;/strong&gt;&lt;br /&gt;
+  simplicity vs user experience&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Multi-region vs complexity&lt;/strong&gt;&lt;br /&gt;
+  lower latency vs operational overhead&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;kubernetes-mapping&quot;&gt;Kubernetes Mapping&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;ingestion layer → Deployment + HPA (scale on # of connections)&lt;/li&gt;
+  &lt;li&gt;processing services → Deployment + HPA&lt;/li&gt;
+  &lt;li&gt;inference → GPU-backed node pools&lt;/li&gt;
+  &lt;li&gt;Services handle internal routing&lt;/li&gt;
+  &lt;li&gt;autoscaling based on custom metrics (not just CPU)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Connection heavy services are often I/O-bound, so CPU alone is not a reliable signal.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;This system initially looked like a streaming problem.&lt;/p&gt;
+
+&lt;p&gt;But the deeper I went, the more it became about:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;controlling latency&lt;/li&gt;
+  &lt;li&gt;coordinating distributed state&lt;/li&gt;
+  &lt;li&gt;handling backpressure&lt;/li&gt;
+  &lt;li&gt;scaling under real-time constraints&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That is my first design dealing with an AI agent. Lots of improvements to be made here. Stay tuned.&lt;/p&gt;
+</description>
+        <pubDate>Tue, 24 Mar 2026 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2026/03/24/voiceAIagentDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/24/voiceAIagentDesign.html</guid>
+        
+        
+      </item>
+    
+      <item>
+        <title>Designing a Job Scheduler system</title>
+        <description>&lt;p&gt;In this post, I walk through a distributed job scheduler design based on the architecture below. The system supports:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Creating and scheduling jobs&lt;/li&gt;
+  &lt;li&gt;Retrieving job status and execution history&lt;/li&gt;
+  &lt;li&gt;Reliable asynchronous execution&lt;/li&gt;
+  &lt;li&gt;Long-term scheduling for jobs scheduled days in advance&lt;/li&gt;
+  &lt;li&gt;Horizontal scaling to support high parallelism&lt;/li&gt;
+  &lt;li&gt;Retry handling with DLQ support&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;the-shape-of-the-system&quot;&gt;The Shape of the System&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/jobSchedulerArch.png&quot; alt=&quot;Jobscheduler system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The rough architecture in my head looks like this:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;API Gateway&lt;/strong&gt;
+handles auth, routing, and rate limiting&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Job Scheduler Service&lt;/strong&gt;
+accepts create/schedule requests&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Job Search Service&lt;/strong&gt;
+handles reads for status/history&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;DynamoDB&lt;/strong&gt;
+stores jobs, tasks, and schedule records&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Job Executor Service&lt;/strong&gt;
+decides when a job should move toward execution and processes status updates&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Cron Job&lt;/strong&gt;
+periodically checks long-term scheduled work&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;EventBridge&lt;/strong&gt;
+holds jobs until they are close to execution&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;SQS&lt;/strong&gt;
+buffers executable work and status events&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Worker Fleet on EKS&lt;/strong&gt;
+runs jobs in parallel&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;DLQ&lt;/strong&gt;
+catches jobs that repeatedly fail&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The main idea I like here is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;DynamoDB is where future work lives durably&lt;/li&gt;
+  &lt;li&gt;EventBridge helps with short-term timing&lt;/li&gt;
+  &lt;li&gt;SQS + workers handle scalable execution&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That feels cleaner to me than trying to make one component do everything.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;where-my-head-went-first&quot;&gt;Where My Head Went First&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;user schedules a job -&amp;gt; put it in a queue with a delay -&amp;gt; worker runs it later&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;That works only up to a point.&lt;/p&gt;
+
+&lt;p&gt;The problem is that delayed queues usually have limits, and they are not a great place to keep jobs that need to wait for days.&lt;/p&gt;
+
+&lt;p&gt;So if a user schedules something three days out, I do not really want to pretend the execution queue is also my long-term storage layer.&lt;/p&gt;
+
+&lt;p&gt;That was the point where the design split into two phases for me:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;store future schedules durably&lt;/li&gt;
+  &lt;li&gt;promote them into the execution path when they are actually close enough to run&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That split solved a lot of the design questions.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;data-id-store&quot;&gt;Data I’d Store&lt;/h2&gt;
+
+&lt;p&gt;I’d keep three main entities in DynamoDB:&lt;/p&gt;
+
+&lt;h3 id=&quot;jobs&quot;&gt;Jobs&lt;/h3&gt;
+
+&lt;p&gt;This is the logical job definition.&lt;/p&gt;
+
+&lt;p&gt;Example fields:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;jobId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;jobName&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;taskId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdBy&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;tasks&quot;&gt;Tasks&lt;/h3&gt;
+
+&lt;p&gt;This stores task-specific metadata.&lt;/p&gt;
+
+&lt;p&gt;Example fields:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;taskId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;taskDetail&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdDate&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;createdBy&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;job-schedules&quot;&gt;Job Schedules&lt;/h3&gt;
+
+&lt;p&gt;This is the one I care about most for scheduling.&lt;/p&gt;
+
+&lt;p&gt;Example fields:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;scheduleId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;jobId[]&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;runAt&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;status&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Job Schedules&lt;/code&gt; table is basically the source of truth for “what should run in the future and what state is it in now?”&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;write-path&quot;&gt;Write Path&lt;/h2&gt;
+
+&lt;p&gt;When a user creates or schedules a job, this is the flow I’m imagining:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;client sends a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;POST&lt;/code&gt; request through the API Gateway&lt;/li&gt;
+  &lt;li&gt;API Gateway authenticates, rate limits, and routes to the &lt;strong&gt;Job Scheduler Service&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;Job Scheduler Service writes the schedule record into DynamoDB&lt;/li&gt;
+  &lt;li&gt;A CDC-style event flow notifies the &lt;strong&gt;Job Executor Service&lt;/strong&gt; that a new schedule has been created&lt;/li&gt;
+  &lt;li&gt;Job Executor Service checks how close the job is to its execution time&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;At that point I’d split jobs into two buckets:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;near-term jobs&lt;/strong&gt;
+these can move into the timing/execution path right away&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;far-future jobs&lt;/strong&gt;
+these stay in DynamoDB until they get closer&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That feels like the core design choice in this system.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;how-it-actually-runs&quot;&gt;How It Actually Runs&lt;/h2&gt;
+
+&lt;p&gt;Once a job is close enough to execute, I’d push it through something like this:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Job Executor Service or the Cron layer forwards it toward &lt;strong&gt;EventBridge&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;EventBridge waits until it is very close to the target execution time&lt;/li&gt;
+  &lt;li&gt;EventBridge sends the executable message into &lt;strong&gt;SQS&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;workers on EKS poll SQS and run the job&lt;/li&gt;
+  &lt;li&gt;workers send status updates to a separate status queue&lt;/li&gt;
+  &lt;li&gt;Job Executor Service consumes those updates and writes the latest state back to DynamoDB&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;I like the separate status queue because it keeps workers simpler.&lt;/p&gt;
+
+&lt;p&gt;Instead of every worker directly updating the main schedule record, they can just emit events like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RUNNING&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SUCCESS&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FAILED&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;and the Job Executor Service becomes the single place that updates job state.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;read-path&quot;&gt;Read Path&lt;/h2&gt;
+
+&lt;p&gt;Reads are much simpler in my head than writes.&lt;/p&gt;
+
+&lt;p&gt;If a user wants to check scheduled jobs or execution history:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;client sends a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET&lt;/code&gt; request through API Gateway&lt;/li&gt;
+  &lt;li&gt;request goes to &lt;strong&gt;Job Search Service&lt;/strong&gt;&lt;/li&gt;
+  &lt;li&gt;service uses the authenticated user identity&lt;/li&gt;
+  &lt;li&gt;service queries the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Job Schedules&lt;/code&gt; table by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;userId&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;current status gets returned&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Possible statuses might be:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;WAITING&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;QUEUED&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RUNNING&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SUCCESS&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FAILED&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I generally like separating the read path from the execution path here because it makes the user-facing query path easier to reason about.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;the-part-id-worry-about-most-timing-accuracy&quot;&gt;The Part I’d Worry About Most: Timing Accuracy&lt;/h2&gt;
+
+&lt;p&gt;If the requirement is “execute within 2 seconds of the scheduled time,” I would not wait until the exact timestamp to start doing work.&lt;/p&gt;
+
+&lt;p&gt;That sounds obvious, but I think it matters a lot.&lt;/p&gt;
+
+&lt;p&gt;The better approach is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;move the job toward execution a little early&lt;/li&gt;
+  &lt;li&gt;let EventBridge hold it until very close to run time&lt;/li&gt;
+  &lt;li&gt;have workers already polling and ready&lt;/li&gt;
+  &lt;li&gt;keep some worker capacity pre-warmed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Otherwise the system ends up trying to do routing, provisioning, and execution setup right at the deadline, which is exactly when you do not want extra latency.&lt;/p&gt;
+
+&lt;p&gt;So to me, the scheduler is not just deciding &lt;em&gt;what&lt;/em&gt; runs.&lt;/p&gt;
+
+&lt;p&gt;It is also deciding &lt;em&gt;when to start preparing for the run&lt;/em&gt;.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-about-jobs-scheduled-days-ahead&quot;&gt;What About Jobs Scheduled Days Ahead?&lt;/h2&gt;
+
+&lt;p&gt;This is where I think the Cron layer earns its keep.&lt;/p&gt;
+
+&lt;p&gt;When a schedule is first created, I do not want to immediately force it into the execution queue if it is days away.&lt;/p&gt;
+
+&lt;p&gt;Instead:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;keep it durably in DynamoDB&lt;/li&gt;
+  &lt;li&gt;run a periodic Cron job&lt;/li&gt;
+  &lt;li&gt;have that Cron job look for schedules that are now close enough&lt;/li&gt;
+  &lt;li&gt;forward those into EventBridge&lt;/li&gt;
+  &lt;li&gt;let EventBridge handle the final short-term timing&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So the model becomes:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;long-term holding area&lt;/strong&gt; = DynamoDB&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;short-term timing layer&lt;/strong&gt; = EventBridge&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;actual execution buffer&lt;/strong&gt; = SQS&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That layering made the design click for me.&lt;/p&gt;
+
+&lt;p&gt;It avoids abusing SQS as a multi-day scheduler while still keeping the actual execution path queue-based.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;scaling-to-10000-concurrent-jobs&quot;&gt;Scaling to 10,000 Concurrent Jobs&lt;/h2&gt;
+
+&lt;p&gt;If I want to support a lot of jobs running in parallel, the part I trust most is the queue + worker model.&lt;/p&gt;
+
+&lt;p&gt;The rough scaling story is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;executable jobs land in SQS&lt;/li&gt;
+  &lt;li&gt;many workers poll concurrently&lt;/li&gt;
+  &lt;li&gt;workers run on EKS&lt;/li&gt;
+  &lt;li&gt;HPA scales the worker fleet based on load&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Why I like that:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;queues absorb bursts&lt;/li&gt;
+  &lt;li&gt;execution is decoupled from submission&lt;/li&gt;
+  &lt;li&gt;workers can scale horizontally&lt;/li&gt;
+  &lt;li&gt;retries are easier to handle&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I also would not want workers to do too much coordination logic.&lt;/p&gt;
+
+&lt;p&gt;My preference is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;workers execute&lt;/li&gt;
+  &lt;li&gt;workers emit status&lt;/li&gt;
+  &lt;li&gt;Job Executor Service owns schedule state transitions&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That keeps the worker side focused on running jobs instead of trying to be mini schedulers.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;pre-warming-workers&quot;&gt;Pre-Warming Workers&lt;/h2&gt;
+
+&lt;p&gt;One thing I mentioned in my notes was pre-warming workers to avoid cold starts.&lt;/p&gt;
+
+&lt;p&gt;If I had to pick a simple way to do that, I’d probably look ahead into upcoming scheduled demand.&lt;/p&gt;
+
+&lt;p&gt;Something like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;query jobs due in the next 30 minutes&lt;/li&gt;
+  &lt;li&gt;estimate how much worker capacity that implies&lt;/li&gt;
+  &lt;li&gt;compare that to currently available capacity&lt;/li&gt;
+  &lt;li&gt;raise the worker floor before the spike hits&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;It does not need to be perfect to be useful.&lt;/p&gt;
+
+&lt;p&gt;Even a rough demand forecast is better than waiting until the queue is already full and then reacting late.&lt;/p&gt;
+
+&lt;p&gt;Later on I’d make that smarter with:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;average job duration&lt;/li&gt;
+  &lt;li&gt;tasks per job&lt;/li&gt;
+  &lt;li&gt;concurrency per worker&lt;/li&gt;
+  &lt;li&gt;historical spikes&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;But the first version can stay pretty simple.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;failure-handling&quot;&gt;Failure Handling&lt;/h2&gt;
+
+&lt;p&gt;There are really two different failure cases here.&lt;/p&gt;
+
+&lt;h3 id=&quot;1-the-worker-runs-the-job-and-it-fails-visibly&quot;&gt;1. The worker runs the job and it fails visibly&lt;/h3&gt;
+
+&lt;p&gt;Examples:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;downstream dependency fails&lt;/li&gt;
+  &lt;li&gt;code throws an exception&lt;/li&gt;
+  &lt;li&gt;job returns an explicit failure&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In that case I’d want:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;retries with exponential backoff&lt;/li&gt;
+  &lt;li&gt;retry count tracking&lt;/li&gt;
+  &lt;li&gt;DLQ after max attempts&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Once it lands in the DLQ, the Job Executor Service can mark the schedule as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FAILED&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;2-the-worker-disappears-mid-execution&quot;&gt;2. The worker disappears mid-execution&lt;/h3&gt;
+
+&lt;p&gt;This one is trickier because the failure is not always explicit.&lt;/p&gt;
+
+&lt;p&gt;That is where SQS visibility timeout helps.&lt;/p&gt;
+
+&lt;p&gt;The rough idea:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;worker picks up message&lt;/li&gt;
+  &lt;li&gt;message becomes temporarily invisible&lt;/li&gt;
+  &lt;li&gt;if worker finishes, it acknowledges the message&lt;/li&gt;
+  &lt;li&gt;if worker dies, visibility timeout expires&lt;/li&gt;
+  &lt;li&gt;another worker can pick the message back up&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That gives the system a reasonable way to recover from silent worker failures without inventing some custom lease system from scratch.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;if-something-hits-the-dlq&quot;&gt;If Something Hits the DLQ&lt;/h2&gt;
+
+&lt;p&gt;If a job ends up in the DLQ and the user later fixes the underlying issue, I would not replay the raw DLQ message directly.&lt;/p&gt;
+
+&lt;p&gt;I’d rather let the user create a new execution attempt through the normal scheduling flow.&lt;/p&gt;
+
+&lt;p&gt;So the re-trigger path in my head is:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;user sees the failed job in the read API&lt;/li&gt;
+  &lt;li&gt;user submits a new scheduling request&lt;/li&gt;
+  &lt;li&gt;system creates a new schedule record&lt;/li&gt;
+  &lt;li&gt;that new record goes through the normal scheduling and execution pipeline&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;I like that better because it is cleaner operationally and better for auditability.&lt;/p&gt;
+
+&lt;p&gt;You get a fresh execution attempt with its own lifecycle instead of mutating a dead one in a weird way.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;p&gt;What I like about this design:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;durable storage for future schedules&lt;/li&gt;
+  &lt;li&gt;cleaner separation between scheduling, timing, and execution&lt;/li&gt;
+  &lt;li&gt;handles both near-term and far-future jobs&lt;/li&gt;
+  &lt;li&gt;scales well with queue-based workers&lt;/li&gt;
+  &lt;li&gt;retries and DLQ handling fit naturally&lt;/li&gt;
+  &lt;li&gt;status tracking is user-visible&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;What makes it more expensive conceptually:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;there are a lot more moving parts&lt;/li&gt;
+  &lt;li&gt;Cron promotion adds operational overhead&lt;/li&gt;
+  &lt;li&gt;status propagation adds another async hop&lt;/li&gt;
+  &lt;li&gt;the system is easy to understand at a high level, but harder to operate well&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That said, this kind of complexity feels justified to me once the requirements include both precise timing and large-scale parallel execution.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-id-take-away-from-this&quot;&gt;What I’d Take Away From This&lt;/h2&gt;
+
+&lt;p&gt;The biggest thing this design made me realize is that a scheduler is really doing three different jobs:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;remembering&lt;/strong&gt;
+what should run in the future&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;timing&lt;/strong&gt;
+when it should get pushed closer to execution&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;executing&lt;/strong&gt;
+actually running the work reliably at scale&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Once I separated those three in my head, the system became much easier to reason about.&lt;/p&gt;
+
+&lt;p&gt;That is probably the main lesson I’d keep from this one.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 13 Feb 2026 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2026/02/13/jobSchedulerDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/02/13/jobSchedulerDesign.html</guid>
+        
+        
+      </item>
     
       <item>
         <title>Designing a Scalable Web Crawler</title>
@@ -396,9 +1165,9 @@
 
 &lt;p&gt;That is what makes this one fun to think about.&lt;/p&gt;
 </description>
-        <pubDate>Mon, 09 Mar 2026 00:00:00 -0700</pubDate>
-        <link>http://localhost:4000/2026/03/09/webCrawlerDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/03/09/webCrawlerDesign.html</guid>
+        <pubDate>Mon, 19 Jan 2026 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2026/01/19/webCrawlerDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/01/19/webCrawlerDesign.html</guid>
         
         
       </item>
@@ -796,9 +1565,9 @@
 
 &lt;p&gt;Once I started viewing it as a system for managing contested state under load, the architecture made a lot more sense.&lt;/p&gt;
 </description>
-        <pubDate>Thu, 05 Mar 2026 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2026/03/05/ticketMasterDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/03/05/ticketMasterDesign.html</guid>
+        <pubDate>Fri, 05 Sep 2025 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2025/09/05/ticketMasterDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2025/09/05/ticketMasterDesign.html</guid>
         
         
       </item>
@@ -1126,9 +1895,9 @@ avgRating = ratingSum / reviewCount
 
 &lt;hr /&gt;
 </description>
-        <pubDate>Tue, 24 Feb 2026 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2026/02/24/yelpSystemDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/02/24/yelpSystemDesign.html</guid>
+        <pubDate>Thu, 14 Nov 2024 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2024/11/14/yelpSystemDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2024/11/14/yelpSystemDesign.html</guid>
         
         
       </item>
@@ -1566,9 +2335,9 @@ avgRating = ratingSum / reviewCount
   &lt;li&gt;per-user rate limiting&lt;/li&gt;
 &lt;/ul&gt;
 </description>
-        <pubDate>Tue, 10 Feb 2026 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2026/02/10/whatsAppDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/02/10/whatsAppDesign.html</guid>
+        <pubDate>Fri, 21 Jul 2023 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2023/07/21/whatsAppDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2023/07/21/whatsAppDesign.html</guid>
         
         
       </item>
@@ -1933,9 +2702,9 @@ avgRating = ratingSum / reviewCount
   &lt;li&gt;write-through vs write-back&lt;/li&gt;
 &lt;/ul&gt;
 </description>
-        <pubDate>Sat, 25 Oct 2025 00:00:00 -0700</pubDate>
-        <link>http://localhost:4000/2025/10/25/distributedCache.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2025/10/25/distributedCache.html</guid>
+        <pubDate>Wed, 15 Feb 2023 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2023/02/15/distributedCache.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2023/02/15/distributedCache.html</guid>
         
         
       </item>
@@ -2193,9 +2962,9 @@ avgRating = ratingSum / reviewCount
   &lt;li&gt;multi-region support&lt;/li&gt;
 &lt;/ul&gt;
 </description>
-        <pubDate>Tue, 12 Nov 2024 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2024/11/12/rateLimiterDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2024/11/12/rateLimiterDesign.html</guid>
+        <pubDate>Sat, 12 Nov 2022 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2022/11/12/rateLimiterDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2022/11/12/rateLimiterDesign.html</guid>
         
         
       </item>
@@ -2695,194 +3464,6 @@ brew &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;tesseract
         <pubDate>Tue, 09 Feb 2016 00:00:00 -0800</pubDate>
         <link>http://localhost:4000/2016/02/09/tesseract.html</link>
         <guid isPermaLink="true">http://localhost:4000/2016/02/09/tesseract.html</guid>
-        
-        
-      </item>
-    
-      <item>
-        <title>Using Bcrypt with Node.js</title>
-        <description>&lt;p&gt;&lt;img src=&quot;/images/bcrypt.jpg&quot; alt=&quot;Bcrypt illustration&quot; /&gt;&lt;/p&gt;
-
-&lt;p&gt;This is an older note on using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; in Node.js.&lt;/p&gt;
-
-&lt;p&gt;The main thing I was trying to understand at the time was not really how hashing works in theory, but how to structure it cleanly in an asynchronous code path when creating or validating users.&lt;/p&gt;
-
-&lt;h2 id=&quot;why-bcrypt&quot;&gt;Why Bcrypt&lt;/h2&gt;
-
-&lt;p&gt;If you need to store user passwords, the important part is that you do &lt;strong&gt;not&lt;/strong&gt; store them in plain text.&lt;/p&gt;
-
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; is useful because it handles:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;salting&lt;/li&gt;
-  &lt;li&gt;hashing&lt;/li&gt;
-  &lt;li&gt;password comparison&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;At the time, what tripped me up was not the hashing itself. It was how to make the async flow work cleanly with the rest of the application code.&lt;/p&gt;
-
-&lt;h2 id=&quot;basic-flow&quot;&gt;Basic Flow&lt;/h2&gt;
-
-&lt;p&gt;The basic &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bcrypt&lt;/code&gt; flow looks like this:&lt;/p&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-&lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;genSalt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;nx&quot;&gt;bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;B4c0/&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\\&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;c1&quot;&gt;// Store hash in your password DB&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;That part is straightforward.&lt;/p&gt;
-
-&lt;p&gt;The thing I was trying to solve was how to return something usable from that async chain so the rest of the server code could continue in a predictable way.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-approach-i-used&quot;&gt;The Approach I Used&lt;/h2&gt;
-
-&lt;p&gt;At the time, I used &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Q&lt;/code&gt; promises to wrap the async bcrypt work and return a promise from the database layer.&lt;/p&gt;
-
-&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;npm &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;q
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;The core idea was:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;create a deferred object&lt;/li&gt;
-  &lt;li&gt;do the bcrypt work&lt;/li&gt;
-  &lt;li&gt;save the user once the password is hashed&lt;/li&gt;
-  &lt;li&gt;resolve or reject the promise&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h2 id=&quot;creating-a-user&quot;&gt;Creating a User&lt;/h2&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;createUser&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Q&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-
-    &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;genSalt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;Salt_Factor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-        &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;salt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-            &lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-            &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;User&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-            &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;save&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;reject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;resolve&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-            &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;promise&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;What mattered to me here was returning &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;defer.promise&lt;/code&gt; from the outer function so the caller could keep using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;.then(...)&lt;/code&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;checking-a-users-password&quot;&gt;Checking a User’s Password&lt;/h2&gt;
-
-&lt;p&gt;The login side is similar, except instead of generating a salt and hash again, you compare the incoming password against the stored hash.&lt;/p&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;findUser&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Q&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-
-    &lt;span class=&quot;nx&quot;&gt;User&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;find&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;({&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;username&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;unable to find user&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;nx&quot;&gt;Bcrypt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;compare&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;obj&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;].&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;reject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-                    &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;resolve&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-            &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;defer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;promise&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;h2 id=&quot;why-this-helped&quot;&gt;Why This Helped&lt;/h2&gt;
-
-&lt;p&gt;The main lesson for me was that async security code is not hard because of bcrypt itself. It gets awkward when you need to fit it into the rest of your application flow cleanly.&lt;/p&gt;
-
-&lt;p&gt;Returning a promise from the outer function made the calling code much easier to reason about.&lt;/p&gt;
-
-&lt;h2 id=&quot;example-request-handler&quot;&gt;Example Request Handler&lt;/h2&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;app&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;post&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/createUser&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;req&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;nx&quot;&gt;db&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;createUser&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;req&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;body&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;406&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;nx&quot;&gt;res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;200&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;This is obviously older Node.js style now, but the core idea still holds: hash before storage, compare on login, and make the async flow easy to work with.&lt;/p&gt;
-</description>
-        <pubDate>Thu, 21 Jan 2016 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2016/01/21/bcrypt.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2016/01/21/bcrypt.html</guid>
-        
-        
-      </item>
-    
-      <item>
-        <title>Coding Best Practices</title>
-        <description>&lt;p&gt;&lt;img src=&quot;/images/CodingBestPractices.jpg&quot; alt=&quot;Coding best practices cover image&quot; /&gt;&lt;/p&gt;
-
-&lt;p&gt;This is an older set of notes I wrote down for myself on coding habits that still matter.&lt;/p&gt;
-
-&lt;p&gt;None of this is especially groundbreaking, but these are the kinds of things that usually make a bigger difference than whatever framework or language happens to be popular at the moment.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-i-still-believe&quot;&gt;What I Still Believe&lt;/h2&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;Build the simplest version first. An MVP is usually the fastest way to learn whether your idea actually works.&lt;/li&gt;
-  &lt;li&gt;Before writing code, spend a little time thinking through the shape of the solution. Even rough pseudocode saves a lot of wasted effort.&lt;/li&gt;
-  &lt;li&gt;When a problem feels too big, break it into smaller pieces and solve one part at a time.&lt;/li&gt;
-  &lt;li&gt;Error messages are useful. If the output still does not make sense, debugging tools are usually more helpful than random code changes.&lt;/li&gt;
-  &lt;li&gt;When debugging, try to form a theory and test it. Moving code around without a reason usually just creates more confusion.&lt;/li&gt;
-  &lt;li&gt;Develop a workflow that helps you make steady progress. For me, that usually means committing changes in reasonable chunks.&lt;/li&gt;
-  &lt;li&gt;Learn the shortcuts and tools in your editor well enough that they stop getting in your way.&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h2 id=&quot;design-habits&quot;&gt;Design Habits&lt;/h2&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;Modularity matters. Splitting code into smaller pieces usually makes it easier to reason about and easier to change later.&lt;/li&gt;
-  &lt;li&gt;Loose coupling matters. The less one part of the codebase depends on another, the easier it is to evolve both.&lt;/li&gt;
-  &lt;li&gt;Thin interfaces are underrated. Functions that take a small number of inputs are usually easier to understand and test.&lt;/li&gt;
-  &lt;li&gt;Intuitive naming is worth the effort. Good names reduce the amount of mental overhead every time you come back to the code.&lt;/li&gt;
-  &lt;li&gt;Passing dependencies explicitly is usually cleaner than quietly depending on globals or hidden state.&lt;/li&gt;
-  &lt;li&gt;Avoid unnecessary side effects when you can. Predictable code is easier to debug and easier to trust.&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h2 id=&quot;cleanup-matters&quot;&gt;Cleanup Matters&lt;/h2&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;Once the basic logic is working, clean it up. Shorter, clearer code is usually easier to maintain.&lt;/li&gt;
-  &lt;li&gt;DRY still matters, but only after the pattern is real. I would rather duplicate something twice than abstract it badly too early.&lt;/li&gt;
-  &lt;li&gt;Stay humble and keep learning. This field changes too fast for ego to be useful for very long.&lt;/li&gt;
-&lt;/ul&gt;
-</description>
-        <pubDate>Fri, 11 Dec 2015 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2015/12/11/bestPractices.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2015/12/11/bestPractices.html</guid>
         
         
       </item>
