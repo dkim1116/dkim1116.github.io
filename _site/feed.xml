@@ -6,9 +6,575 @@
 </description>
     <link>http://localhost:4000/</link>
     <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 26 Mar 2026 15:59:53 -0700</pubDate>
-    <lastBuildDate>Thu, 26 Mar 2026 15:59:53 -0700</lastBuildDate>
+    <pubDate>Sat, 28 Mar 2026 14:32:06 -0700</pubDate>
+    <lastBuildDate>Sat, 28 Mar 2026 14:32:06 -0700</lastBuildDate>
     <generator>Jekyll v4.4.1</generator>
+    
+      <item>
+        <title>Designing a Metrics Monitoring System like Datadog</title>
+        <description>&lt;p&gt;In this post, I walk through how I would design a high-throughput metrics monitoring and alerting system.&lt;/p&gt;
+
+&lt;p&gt;The system should support:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;ingesting millions of metric events per second&lt;/li&gt;
+  &lt;li&gt;near real-time alerting&lt;/li&gt;
+  &lt;li&gt;low-latency dashboard queries&lt;/li&gt;
+  &lt;li&gt;reliable processing even when data arrives late or out of order&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-i-want-the-system-to-do&quot;&gt;What I Want the System to Do&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;collect metrics from hundreds of thousands of machines&lt;/li&gt;
+  &lt;li&gt;store recent high-fidelity data&lt;/li&gt;
+  &lt;li&gt;support long-range dashboard queries&lt;/li&gt;
+  &lt;li&gt;trigger alerts quickly when something goes wrong&lt;/li&gt;
+  &lt;li&gt;keep working during partial failures&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-matters-most&quot;&gt;What Matters Most&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;high throughput&lt;/li&gt;
+  &lt;li&gt;low query latency&lt;/li&gt;
+  &lt;li&gt;fast alert evaluation&lt;/li&gt;
+  &lt;li&gt;high availability&lt;/li&gt;
+  &lt;li&gt;graceful handling of out-of-order events&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The tricky thing about metrics systems is that they have to do three jobs at once:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;absorb a huge write volume&lt;/li&gt;
+  &lt;li&gt;serve interactive read queries&lt;/li&gt;
+  &lt;li&gt;evaluate alerts fast enough to be operationally useful&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That combination is what makes the design interesting.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;initial-thought-and-why-it-breaks&quot;&gt;Initial Thought (and why it breaks)&lt;/h2&gt;
+
+&lt;p&gt;My first instinct was:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;agents send metrics directly to a database, dashboards read from that database, and alerts poll it&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;However, that works only up to a point.&lt;/p&gt;
+
+&lt;p&gt;The problems show up pretty quickly:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;direct database writes become a bottleneck at high ingest volume&lt;/li&gt;
+  &lt;li&gt;dashboards and writes start competing for the same storage resources&lt;/li&gt;
+  &lt;li&gt;polling alerts add latency&lt;/li&gt;
+  &lt;li&gt;retries and late-arriving events become harder to reason about&lt;/li&gt;
+  &lt;li&gt;raw data gets too expensive to query over long time ranges&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So the design naturally splits for me into a few layers:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;ingestion&lt;/li&gt;
+  &lt;li&gt;streaming / buffering&lt;/li&gt;
+  &lt;li&gt;storage&lt;/li&gt;
+  &lt;li&gt;querying&lt;/li&gt;
+  &lt;li&gt;alert evaluation&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That separation is what makes the system easier to scale.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;core-entities&quot;&gt;Core Entities&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;Metric&lt;/strong&gt;: for example &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;cpu_usage&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Label&lt;/strong&gt;: metadata such as host, region, service, tenant&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Series&lt;/strong&gt;: a unique combination of metric name + labels&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Alert Rule&lt;/strong&gt;: a condition evaluated over a moving time window&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The key idea is that a time-series system does not just store “CPU values.”&lt;/p&gt;
+
+&lt;p&gt;It stores values for many distinct series, and a series is really defined by metric plus labels.&lt;/p&gt;
+
+&lt;p&gt;That is powerful, but it is also where cardinality problems come from.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;high-level-architecture&quot;&gt;High-Level Architecture&lt;/h2&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/metricsArch.png&quot; alt=&quot;metrics monitoring system architecture diagram&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The main layers I would use are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;agent layer on each server&lt;/li&gt;
+  &lt;li&gt;stateless ingestion service&lt;/li&gt;
+  &lt;li&gt;Kafka as the streaming backbone&lt;/li&gt;
+  &lt;li&gt;raw and rollup consumer pipelines&lt;/li&gt;
+  &lt;li&gt;time-series storage&lt;/li&gt;
+  &lt;li&gt;query service for dashboards&lt;/li&gt;
+  &lt;li&gt;alerting services for polling and streaming use cases&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The basic flow looks like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;agents batch and send metric events&lt;/li&gt;
+  &lt;li&gt;ingestion nodes validate and publish to Kafka&lt;/li&gt;
+  &lt;li&gt;raw consumers write detailed samples to storage&lt;/li&gt;
+  &lt;li&gt;rollup consumers precompute aggregates&lt;/li&gt;
+  &lt;li&gt;query service reads from raw or rollup data depending on time range&lt;/li&gt;
+  &lt;li&gt;alerting services evaluate conditions and trigger notifications&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;ingestion-layer&quot;&gt;Ingestion Layer&lt;/h2&gt;
+
+&lt;p&gt;Each machine runs a lightweight agent that batches metrics before sending them upstream.&lt;/p&gt;
+
+&lt;p&gt;Requests go through an &lt;strong&gt;L4 load balancer&lt;/strong&gt; to a fleet of &lt;strong&gt;stateless ingestion service&lt;/strong&gt; instances.&lt;/p&gt;
+
+&lt;p&gt;Why I like that setup:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;stateless ingestion is easy to scale horizontally&lt;/li&gt;
+  &lt;li&gt;agents can buffer temporarily during failures&lt;/li&gt;
+  &lt;li&gt;batching reduces per-request overhead&lt;/li&gt;
+  &lt;li&gt;the ingestion tier stays simple and focused on validation plus handoff&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I would also make the ingestion API idempotent enough to tolerate retries, because metric senders will absolutely retry during network issues.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;streaming-layer&quot;&gt;Streaming Layer&lt;/h2&gt;
+
+&lt;p&gt;The ingestion service publishes incoming metrics into Kafka.&lt;/p&gt;
+
+&lt;p&gt;Kafka is doing a lot of work for this design:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;absorbing bursty writes&lt;/li&gt;
+  &lt;li&gt;decoupling ingestion from downstream consumers&lt;/li&gt;
+  &lt;li&gt;enabling independent consumer groups&lt;/li&gt;
+  &lt;li&gt;providing durable replay after failures&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Partitioning matters a lot here.&lt;/p&gt;
+
+&lt;p&gt;I would partition by something stable such as:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;tenant ID&lt;/li&gt;
+  &lt;li&gt;service or host grouping&lt;/li&gt;
+  &lt;li&gt;some hash of the series key&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The goal is to spread load while preserving enough locality for downstream processing.&lt;/p&gt;
+
+&lt;p&gt;This is one place where hot partitions can become a real problem if a small set of tenants or hosts sends much more traffic than everything else.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;consumer-layer&quot;&gt;Consumer Layer&lt;/h2&gt;
+
+&lt;p&gt;I would split processing into two independent pipelines.&lt;/p&gt;
+
+&lt;h3 id=&quot;raw-consumer-group&quot;&gt;Raw Consumer Group&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;consumes from Kafka&lt;/li&gt;
+  &lt;li&gt;writes raw samples into time-series storage&lt;/li&gt;
+  &lt;li&gt;keeps recent, high-fidelity data available&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This path is important for:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;recent dashboards&lt;/li&gt;
+  &lt;li&gt;debugging incidents&lt;/li&gt;
+  &lt;li&gt;root-cause analysis&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;rollup-consumer-group&quot;&gt;Rollup Consumer Group&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;consumes the same Kafka stream&lt;/li&gt;
+  &lt;li&gt;computes time-bucketed aggregates&lt;/li&gt;
+  &lt;li&gt;writes summarized data into rollup tables&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Typical aggregates:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;average&lt;/li&gt;
+  &lt;li&gt;minimum&lt;/li&gt;
+  &lt;li&gt;maximum&lt;/li&gt;
+  &lt;li&gt;count&lt;/li&gt;
+  &lt;li&gt;percentiles if needed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This is one of the most useful design splits in the system.&lt;/p&gt;
+
+&lt;p&gt;Raw data gives flexibility, but rollups make longer-range queries much cheaper.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;storage-layer&quot;&gt;Storage Layer&lt;/h2&gt;
+
+&lt;p&gt;I would use a time-series-oriented database such as TimescaleDB, ClickHouse, or InfluxDB depending on the surrounding stack and query needs.&lt;/p&gt;
+
+&lt;h3 id=&quot;raw-data-store&quot;&gt;Raw Data Store&lt;/h3&gt;
+
+&lt;p&gt;Stores fields like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;timestamp&lt;/li&gt;
+  &lt;li&gt;metric name&lt;/li&gt;
+  &lt;li&gt;labels&lt;/li&gt;
+  &lt;li&gt;value&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Used for:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;recent queries&lt;/li&gt;
+  &lt;li&gt;detailed debugging&lt;/li&gt;
+  &lt;li&gt;short retention high-fidelity access&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;rollup-store&quot;&gt;Rollup Store&lt;/h3&gt;
+
+&lt;p&gt;Stores fields like:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;time bucket&lt;/li&gt;
+  &lt;li&gt;metric name&lt;/li&gt;
+  &lt;li&gt;label dimensions or preselected grouping keys&lt;/li&gt;
+  &lt;li&gt;aggregate values&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Used for:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;long-range dashboard queries&lt;/li&gt;
+  &lt;li&gt;lower-cost historical analysis&lt;/li&gt;
+  &lt;li&gt;faster aggregate reads&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I would also think about retention tiers here.&lt;/p&gt;
+
+&lt;p&gt;For example:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;raw data kept for a short window&lt;/li&gt;
+  &lt;li&gt;rollups kept much longer&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That usually gives a better cost/performance balance than keeping everything raw forever.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;query-layer&quot;&gt;Query Layer&lt;/h2&gt;
+
+&lt;p&gt;Dashboards should hit a dedicated &lt;strong&gt;Query Service&lt;/strong&gt; instead of reading storage directly.&lt;/p&gt;
+
+&lt;p&gt;That service would:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;validate and parse queries&lt;/li&gt;
+  &lt;li&gt;enforce tenant isolation&lt;/li&gt;
+  &lt;li&gt;choose raw versus rollup tables based on time range and granularity&lt;/li&gt;
+  &lt;li&gt;optionally merge recent raw data with older rollup data&lt;/li&gt;
+  &lt;li&gt;use caching for repeated dashboard requests&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The important idea is that query routing should be intentional.&lt;/p&gt;
+
+&lt;p&gt;If every dashboard query hits the raw table, the system gets expensive fast.&lt;/p&gt;
+
+&lt;p&gt;So my mental model is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;recent and detailed queries -&amp;gt; raw data&lt;/li&gt;
+  &lt;li&gt;long-range and aggregate queries -&amp;gt; rollups&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That is the main compute versus storage tradeoff in the design.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;alerting-system&quot;&gt;Alerting System&lt;/h2&gt;
+
+&lt;p&gt;I would split alerts into two categories because not every alert needs the same latency.&lt;/p&gt;
+
+&lt;h3 id=&quot;standard-alerts&quot;&gt;Standard Alerts&lt;/h3&gt;
+
+&lt;p&gt;For less latency-sensitive alerts:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;alert service periodically queries the time-series store&lt;/li&gt;
+  &lt;li&gt;matching conditions generate alert events&lt;/li&gt;
+  &lt;li&gt;notification service delivers email, SMS, or push notifications&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This polling model is simpler and often good enough for many use cases.&lt;/p&gt;
+
+&lt;h3 id=&quot;critical-alerts&quot;&gt;Critical Alerts&lt;/h3&gt;
+
+&lt;p&gt;For latency-sensitive alerts, I would move evaluation onto the streaming path.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;a critical alert service consumes metrics directly from Kafka&lt;/li&gt;
+  &lt;li&gt;alert rules are stored durably in SQL&lt;/li&gt;
+  &lt;li&gt;rules are propagated to evaluators, for example through CDC&lt;/li&gt;
+  &lt;li&gt;active rule state is kept in memory for fast evaluation&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The flow becomes:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;metric arrives in Kafka&lt;/li&gt;
+  &lt;li&gt;alert evaluator checks active rules immediately&lt;/li&gt;
+  &lt;li&gt;if a threshold is breached, notification is triggered&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That avoids the lag introduced by polling.&lt;/p&gt;
+
+&lt;p&gt;It is more complex, but much more aligned with operationally urgent alerting.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;write-path&quot;&gt;Write Path&lt;/h2&gt;
+
+&lt;p&gt;A typical write flow in my head looks like this:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;agent batches and sends metric samples&lt;/li&gt;
+  &lt;li&gt;ingestion service validates format, tenant metadata, and basic limits&lt;/li&gt;
+  &lt;li&gt;ingestion service publishes events to Kafka&lt;/li&gt;
+  &lt;li&gt;raw consumers write detailed samples to storage&lt;/li&gt;
+  &lt;li&gt;rollup consumers update aggregate tables&lt;/li&gt;
+  &lt;li&gt;streaming alert consumers evaluate critical rules&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That keeps the hot write path append-heavy and avoids forcing every responsibility onto the database.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;read-path&quot;&gt;Read Path&lt;/h2&gt;
+
+&lt;p&gt;A typical dashboard query would look like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;dashboard sends a query to the Query Service&lt;/li&gt;
+  &lt;li&gt;service authenticates and validates the request&lt;/li&gt;
+  &lt;li&gt;service decides whether the query should read raw data, rollup data, or both&lt;/li&gt;
+  &lt;li&gt;results are returned with optional caching&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;I like this separation because it gives the system a place to encode query policy instead of leaving every client to guess which table it should use.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;deep-dives&quot;&gt;Deep Dives&lt;/h2&gt;
+
+&lt;h3 id=&quot;scaling-to-millions-of-metrics-per-second&quot;&gt;Scaling to Millions of Metrics per Second&lt;/h3&gt;
+
+&lt;p&gt;The rough scaling story is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;horizontally scale ingestion services&lt;/li&gt;
+  &lt;li&gt;use Kafka partitions for parallel consumption&lt;/li&gt;
+  &lt;li&gt;scale raw and rollup consumers independently&lt;/li&gt;
+  &lt;li&gt;batch aggressively at the agent and consumer layers&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That gives the system multiple places to absorb throughput instead of pushing all pressure onto storage.&lt;/p&gt;
+
+&lt;h3 id=&quot;low-latency-queries&quot;&gt;Low-Latency Queries&lt;/h3&gt;
+
+&lt;p&gt;Querying raw samples over long time ranges is expensive.&lt;/p&gt;
+
+&lt;p&gt;The main fix is precomputation:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;store raw data for detail&lt;/li&gt;
+  &lt;li&gt;store rollups for efficiency&lt;/li&gt;
+  &lt;li&gt;route queries intentionally&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Without that split, the dashboard experience usually degrades first.&lt;/p&gt;
+
+&lt;h3 id=&quot;real-time-alerts&quot;&gt;Real-Time Alerts&lt;/h3&gt;
+
+&lt;p&gt;Polling is simpler, but it adds latency that can matter during incidents.&lt;/p&gt;
+
+&lt;p&gt;So for high-priority alerts, I would rather evaluate directly from the stream and keep only the state needed for sliding-window checks in memory or fast state storage.&lt;/p&gt;
+
+&lt;h3 id=&quot;out-of-order-events&quot;&gt;Out-of-Order Events&lt;/h3&gt;
+
+&lt;p&gt;Metrics often arrive late because of retries, batching, or temporary network failures.&lt;/p&gt;
+
+&lt;p&gt;That means the system needs a clear rule for how long it will accept late data into a window or rollup.&lt;/p&gt;
+
+&lt;p&gt;Typical choices are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;allow a bounded lateness window&lt;/li&gt;
+  &lt;li&gt;update aggregates during that window&lt;/li&gt;
+  &lt;li&gt;close the window after a threshold and treat later data separately&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Without this, rollups and alerts can become inconsistent.&lt;/p&gt;
+
+&lt;h3 id=&quot;cardinality-explosion&quot;&gt;Cardinality Explosion&lt;/h3&gt;
+
+&lt;p&gt;This is one of the biggest practical risks in a metrics platform.&lt;/p&gt;
+
+&lt;p&gt;If users attach highly variable labels such as request IDs or user IDs, the number of distinct series can explode.&lt;/p&gt;
+
+&lt;p&gt;That hurts:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;storage footprint&lt;/li&gt;
+  &lt;li&gt;memory usage&lt;/li&gt;
+  &lt;li&gt;query latency&lt;/li&gt;
+  &lt;li&gt;indexing efficiency&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So I would want safeguards such as:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;label allowlists or validation&lt;/li&gt;
+  &lt;li&gt;per-tenant cardinality limits&lt;/li&gt;
+  &lt;li&gt;visibility into top cardinality offenders&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;failure-recovery&quot;&gt;Failure Recovery&lt;/h2&gt;
+
+&lt;p&gt;For the critical alert path, recovery would look something like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;reload alert rules from durable storage&lt;/li&gt;
+  &lt;li&gt;restore recent evaluation state if needed&lt;/li&gt;
+  &lt;li&gt;resume Kafka consumption from committed offsets&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Kafka offsets matter a lot here because they define where each consumer group continues after a crash.&lt;/p&gt;
+
+&lt;p&gt;That helps prevent data loss and limits duplicate processing.&lt;/p&gt;
+
+&lt;p&gt;More broadly, I would want resilience at each layer:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;agents buffer and retry temporarily&lt;/li&gt;
+  &lt;li&gt;ingestion nodes are stateless and replaceable&lt;/li&gt;
+  &lt;li&gt;Kafka replicates across brokers&lt;/li&gt;
+  &lt;li&gt;consumers can replay from offsets&lt;/li&gt;
+  &lt;li&gt;notifications are queued for reliable delivery&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;tradeoffs&quot;&gt;Tradeoffs&lt;/h2&gt;
+
+&lt;h3 id=&quot;kafka-vs-simpler-queues&quot;&gt;Kafka vs Simpler Queues&lt;/h3&gt;
+
+&lt;p&gt;Kafka is more operationally complex, but I think it is the better fit here because:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;throughput is much higher&lt;/li&gt;
+  &lt;li&gt;replay is valuable&lt;/li&gt;
+  &lt;li&gt;multiple consumer groups are a first-class pattern&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;A simpler queue is easier to operate, but not as natural for a multi-consumer streaming pipeline.&lt;/p&gt;
+
+&lt;h3 id=&quot;raw-vs-rollup-storage&quot;&gt;Raw vs Rollup Storage&lt;/h3&gt;
+
+&lt;p&gt;Raw data gives fidelity and flexibility.&lt;/p&gt;
+
+&lt;p&gt;Rollups give much faster and cheaper long-range queries.&lt;/p&gt;
+
+&lt;p&gt;You usually need both.&lt;/p&gt;
+
+&lt;h3 id=&quot;streaming-vs-polling-alerts&quot;&gt;Streaming vs Polling Alerts&lt;/h3&gt;
+
+&lt;p&gt;Polling is easier to build.&lt;/p&gt;
+
+&lt;p&gt;Streaming is better for low-latency alerting.&lt;/p&gt;
+
+&lt;p&gt;I would not use streaming for everything, but I also would not rely on polling for urgent incident signals.&lt;/p&gt;
+
+&lt;h3 id=&quot;more-labels-vs-more-cost&quot;&gt;More Labels vs More Cost&lt;/h3&gt;
+
+&lt;p&gt;Rich labels make the system more useful, but they also increase cardinality and cost.&lt;/p&gt;
+
+&lt;p&gt;That tradeoff is easy to ignore early and painful later.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;what-id-worry-about-most&quot;&gt;What I’d Worry About Most&lt;/h2&gt;
+
+&lt;p&gt;If I were talking through this in an interview, the areas I would watch most carefully are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;hot Kafka partitions&lt;/li&gt;
+  &lt;li&gt;very high-cardinality label dimensions&lt;/li&gt;
+  &lt;li&gt;dashboard queries that accidentally hit raw data for huge ranges&lt;/li&gt;
+  &lt;li&gt;alert storms during incidents&lt;/li&gt;
+  &lt;li&gt;late or duplicate metric samples&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Those are the kinds of problems that usually decide whether the system stays healthy under real production load.&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;h2 id=&quot;final-thoughts&quot;&gt;Final Thoughts&lt;/h2&gt;
+
+&lt;p&gt;The shape of the design that makes the most sense to me is:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Kafka as the write buffer and streaming backbone&lt;/li&gt;
+  &lt;li&gt;separate raw and rollup pipelines&lt;/li&gt;
+  &lt;li&gt;a query service that chooses the right storage path&lt;/li&gt;
+  &lt;li&gt;polling for standard alerts and streaming for critical ones&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That gives the system a good balance of throughput, query performance, and alert latency without asking one component to do everything.&lt;/p&gt;
+
+&lt;p&gt;If I wanted to push this design further, I would probably go deeper into:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;retention policies&lt;/li&gt;
+  &lt;li&gt;compression&lt;/li&gt;
+  &lt;li&gt;multi-region replication&lt;/li&gt;
+  &lt;li&gt;percentile rollups&lt;/li&gt;
+  &lt;li&gt;tenant isolation and noisy-neighbor controls&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Sat, 28 Mar 2026 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2026/03/28/metricsMonitoringDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/28/metricsMonitoringDesign.html</guid>
+        
+        
+      </item>
     
       <item>
         <title>Designing a Real-Time Voice AI Platform</title>
@@ -325,9 +891,9 @@
 
 &lt;p&gt;That is my first design dealing with an AI agent. Lots of improvements to be made here. Stay tuned.&lt;/p&gt;
 </description>
-        <pubDate>Tue, 24 Mar 2026 00:00:00 -0700</pubDate>
-        <link>http://localhost:4000/2026/03/24/voiceAIagentDesign.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2026/03/24/voiceAIagentDesign.html</guid>
+        <pubDate>Sat, 21 Mar 2026 00:00:00 -0700</pubDate>
+        <link>http://localhost:4000/2026/03/21/voiceAIagentDesign.html</link>
+        <guid isPermaLink="true">http://localhost:4000/2026/03/21/voiceAIagentDesign.html</guid>
         
         
       </item>
@@ -3379,91 +3945,6 @@ avgRating = ratingSum / reviewCount
         <pubDate>Wed, 14 Jul 2021 00:00:00 -0700</pubDate>
         <link>http://localhost:4000/2021/07/14/bitlyDesign.html</link>
         <guid isPermaLink="true">http://localhost:4000/2021/07/14/bitlyDesign.html</guid>
-        
-        
-      </item>
-    
-      <item>
-        <title>Using Tesseract with Node.js</title>
-        <description>&lt;p&gt;This is an older note on using Tesseract OCR with Node.js.&lt;/p&gt;
-
-&lt;p&gt;What interested me about Tesseract was that the API is actually pretty simple, but the quality of the result depends a lot on the input image.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-tesseract-is&quot;&gt;What Tesseract Is&lt;/h2&gt;
-
-&lt;p&gt;Tesseract is an OCR engine, meaning it tries to extract text from an image.&lt;/p&gt;
-
-&lt;p&gt;For a Node.js project, the basic idea is:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;install the OCR engine locally&lt;/li&gt;
-  &lt;li&gt;use a Node wrapper to call it&lt;/li&gt;
-  &lt;li&gt;pass it an image path&lt;/li&gt;
-  &lt;li&gt;get text back&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h2 id=&quot;basic-setup&quot;&gt;Basic Setup&lt;/h2&gt;
-
-&lt;p&gt;Tesseract depends on Leptonica, so that needs to be installed first.&lt;/p&gt;
-
-&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;brew &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;leptonica
-brew &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;tesseract
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;If you need language support beyond English, you also need to install the appropriate language package.&lt;/p&gt;
-
-&lt;p&gt;For the Node side, I used:&lt;/p&gt;
-
-&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;npm &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;node-tesseract
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;h2 id=&quot;basic-usage&quot;&gt;Basic Usage&lt;/h2&gt;
-
-&lt;p&gt;Most of the actual work happens on the backend.&lt;/p&gt;
-
-&lt;p&gt;The Node wrapper is simple to require:&lt;/p&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;var&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;tesseract&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;node-tesseract&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;Then you can process an image by passing in a file path and a callback:&lt;/p&gt;
-
-&lt;div class=&quot;language-js highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nx&quot;&gt;tesseract&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;process&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;__dirname&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;/path/to/image.jpg&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&apos;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;function&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;text&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-  &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;text&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
-
-&lt;p&gt;That part is not the hard part.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-actually-matters&quot;&gt;What Actually Matters&lt;/h2&gt;
-
-&lt;p&gt;The part that mattered more in practice was the quality of the input image.&lt;/p&gt;
-
-&lt;p&gt;Two things made a big difference when I was experimenting with it:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;whether the text was handwritten&lt;/li&gt;
-  &lt;li&gt;whether the image had already been simplified into something high-contrast&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;If the text is handwritten, OCR gets much harder.&lt;/p&gt;
-
-&lt;p&gt;If the image is fully colored or noisy, converting it into something closer to black and white usually helps a lot.&lt;/p&gt;
-
-&lt;p&gt;That was the biggest practical takeaway for me: OCR quality is not just about the engine. A lot of it comes down to preprocessing the image into a form the engine can actually read well.&lt;/p&gt;
-
-&lt;p&gt;Here is the result I got:&lt;/p&gt;
-
-&lt;p&gt;&lt;img src=&quot;/images/tesseract.jpg&quot; alt=&quot;Tesseract OCR example image&quot; /&gt;
-&lt;img src=&quot;/images/tesseract2.png&quot; alt=&quot;Tesseract OCR output example&quot; /&gt;&lt;/p&gt;
-</description>
-        <pubDate>Tue, 09 Feb 2016 00:00:00 -0800</pubDate>
-        <link>http://localhost:4000/2016/02/09/tesseract.html</link>
-        <guid isPermaLink="true">http://localhost:4000/2016/02/09/tesseract.html</guid>
         
         
       </item>

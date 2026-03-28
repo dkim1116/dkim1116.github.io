@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Designing a Metrics Monitoring System like Datadog</title>
+  <meta name="description" content="In this post, I walk through how I would design a high-throughput metrics monitoring and alerting system.">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://localhost:4000/2026/03/28/metricsMonitoringDesign.html">
+  <link rel="alternate" type="application/rss+xml" title="Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure" href="http://localhost:4000/feed.xml">
+</head>
+
+
+  <body>
+
+    <main class="wrapper">
+      <nav class="navigation">
+  <section class="container">
+    <a class="navigation-title" href="/">
+      <span class="title">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</span>
+    </a>
+
+    <ul class="navigation-list">
+      <li class="navigation-item">
+        <a class="navigation-link" href="/about/">About</a>
+      </li>
+    </ul>
+  </section>
+</nav>
+
+    </main>
+
+    
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Designing a Metrics Monitoring System like Datadog</h1>
+    <p class="post-meta"><time datetime="2026-03-28T00:00:00-07:00" itemprop="datePublished">Mar 28, 2026</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>In this post, I walk through how I would design a high-throughput metrics monitoring and alerting system.</p>
+
+<p>The system should support:</p>
+
+<ul>
+  <li>ingesting millions of metric events per second</li>
+  <li>near real-time alerting</li>
+  <li>low-latency dashboard queries</li>
+  <li>reliable processing even when data arrives late or out of order</li>
+</ul>
+
+<p>This is definitely not meant to be a perfect design. These are basically my notes on how I would reason through it right now.</p>
+
+<hr />
+
+<h2 id="what-i-want-the-system-to-do">What I Want the System to Do</h2>
+
+<ul>
+  <li>collect metrics from hundreds of thousands of machines</li>
+  <li>store recent high-fidelity data</li>
+  <li>support long-range dashboard queries</li>
+  <li>trigger alerts quickly when something goes wrong</li>
+  <li>keep working during partial failures</li>
+</ul>
+
+<hr />
+
+<h2 id="what-matters-most">What Matters Most</h2>
+
+<ul>
+  <li>high throughput</li>
+  <li>low query latency</li>
+  <li>fast alert evaluation</li>
+  <li>high availability</li>
+  <li>graceful handling of out-of-order events</li>
+</ul>
+
+<p>The tricky thing about metrics systems is that they have to do three jobs at once:</p>
+
+<ol>
+  <li>absorb a huge write volume</li>
+  <li>serve interactive read queries</li>
+  <li>evaluate alerts fast enough to be operationally useful</li>
+</ol>
+
+<p>That combination is what makes the design interesting.</p>
+
+<hr />
+
+<h2 id="initial-thought-and-why-it-breaks">Initial Thought (and why it breaks)</h2>
+
+<p>My first instinct was:</p>
+
+<blockquote>
+  <p>agents send metrics directly to a database, dashboards read from that database, and alerts poll it</p>
+</blockquote>
+
+<p>However, that works only up to a point.</p>
+
+<p>The problems show up pretty quickly:</p>
+
+<ul>
+  <li>direct database writes become a bottleneck at high ingest volume</li>
+  <li>dashboards and writes start competing for the same storage resources</li>
+  <li>polling alerts add latency</li>
+  <li>retries and late-arriving events become harder to reason about</li>
+  <li>raw data gets too expensive to query over long time ranges</li>
+</ul>
+
+<p>So the design naturally splits for me into a few layers:</p>
+
+<ul>
+  <li>ingestion</li>
+  <li>streaming / buffering</li>
+  <li>storage</li>
+  <li>querying</li>
+  <li>alert evaluation</li>
+</ul>
+
+<p>That separation is what makes the system easier to scale.</p>
+
+<hr />
+
+<h2 id="core-entities">Core Entities</h2>
+
+<ul>
+  <li><strong>Metric</strong>: for example <code class="language-plaintext highlighter-rouge">cpu_usage</code></li>
+  <li><strong>Label</strong>: metadata such as host, region, service, tenant</li>
+  <li><strong>Series</strong>: a unique combination of metric name + labels</li>
+  <li><strong>Alert Rule</strong>: a condition evaluated over a moving time window</li>
+</ul>
+
+<p>The key idea is that a time-series system does not just store “CPU values.”</p>
+
+<p>It stores values for many distinct series, and a series is really defined by metric plus labels.</p>
+
+<p>That is powerful, but it is also where cardinality problems come from.</p>
+
+<hr />
+
+<h2 id="high-level-architecture">High-Level Architecture</h2>
+
+<p><img src="/images/metricsArch.png" alt="metrics monitoring system architecture diagram" /></p>
+
+<p>The main layers I would use are:</p>
+
+<ul>
+  <li>agent layer on each server</li>
+  <li>stateless ingestion service</li>
+  <li>Kafka as the streaming backbone</li>
+  <li>raw and rollup consumer pipelines</li>
+  <li>time-series storage</li>
+  <li>query service for dashboards</li>
+  <li>alerting services for polling and streaming use cases</li>
+</ul>
+
+<p>The basic flow looks like:</p>
+
+<ol>
+  <li>agents batch and send metric events</li>
+  <li>ingestion nodes validate and publish to Kafka</li>
+  <li>raw consumers write detailed samples to storage</li>
+  <li>rollup consumers precompute aggregates</li>
+  <li>query service reads from raw or rollup data depending on time range</li>
+  <li>alerting services evaluate conditions and trigger notifications</li>
+</ol>
+
+<hr />
+
+<h2 id="ingestion-layer">Ingestion Layer</h2>
+
+<p>Each machine runs a lightweight agent that batches metrics before sending them upstream.</p>
+
+<p>Requests go through an <strong>L4 load balancer</strong> to a fleet of <strong>stateless ingestion service</strong> instances.</p>
+
+<p>Why I like that setup:</p>
+
+<ul>
+  <li>stateless ingestion is easy to scale horizontally</li>
+  <li>agents can buffer temporarily during failures</li>
+  <li>batching reduces per-request overhead</li>
+  <li>the ingestion tier stays simple and focused on validation plus handoff</li>
+</ul>
+
+<p>I would also make the ingestion API idempotent enough to tolerate retries, because metric senders will absolutely retry during network issues.</p>
+
+<hr />
+
+<h2 id="streaming-layer">Streaming Layer</h2>
+
+<p>The ingestion service publishes incoming metrics into Kafka.</p>
+
+<p>Kafka is doing a lot of work for this design:</p>
+
+<ul>
+  <li>absorbing bursty writes</li>
+  <li>decoupling ingestion from downstream consumers</li>
+  <li>enabling independent consumer groups</li>
+  <li>providing durable replay after failures</li>
+</ul>
+
+<p>Partitioning matters a lot here.</p>
+
+<p>I would partition by something stable such as:</p>
+
+<ul>
+  <li>tenant ID</li>
+  <li>service or host grouping</li>
+  <li>some hash of the series key</li>
+</ul>
+
+<p>The goal is to spread load while preserving enough locality for downstream processing.</p>
+
+<p>This is one place where hot partitions can become a real problem if a small set of tenants or hosts sends much more traffic than everything else.</p>
+
+<hr />
+
+<h2 id="consumer-layer">Consumer Layer</h2>
+
+<p>I would split processing into two independent pipelines.</p>
+
+<h3 id="raw-consumer-group">Raw Consumer Group</h3>
+
+<ul>
+  <li>consumes from Kafka</li>
+  <li>writes raw samples into time-series storage</li>
+  <li>keeps recent, high-fidelity data available</li>
+</ul>
+
+<p>This path is important for:</p>
+
+<ul>
+  <li>recent dashboards</li>
+  <li>debugging incidents</li>
+  <li>root-cause analysis</li>
+</ul>
+
+<h3 id="rollup-consumer-group">Rollup Consumer Group</h3>
+
+<ul>
+  <li>consumes the same Kafka stream</li>
+  <li>computes time-bucketed aggregates</li>
+  <li>writes summarized data into rollup tables</li>
+</ul>
+
+<p>Typical aggregates:</p>
+
+<ul>
+  <li>average</li>
+  <li>minimum</li>
+  <li>maximum</li>
+  <li>count</li>
+  <li>percentiles if needed</li>
+</ul>
+
+<p>This is one of the most useful design splits in the system.</p>
+
+<p>Raw data gives flexibility, but rollups make longer-range queries much cheaper.</p>
+
+<hr />
+
+<h2 id="storage-layer">Storage Layer</h2>
+
+<p>I would use a time-series-oriented database such as TimescaleDB, ClickHouse, or InfluxDB depending on the surrounding stack and query needs.</p>
+
+<h3 id="raw-data-store">Raw Data Store</h3>
+
+<p>Stores fields like:</p>
+
+<ul>
+  <li>timestamp</li>
+  <li>metric name</li>
+  <li>labels</li>
+  <li>value</li>
+</ul>
+
+<p>Used for:</p>
+
+<ul>
+  <li>recent queries</li>
+  <li>detailed debugging</li>
+  <li>short retention high-fidelity access</li>
+</ul>
+
+<h3 id="rollup-store">Rollup Store</h3>
+
+<p>Stores fields like:</p>
+
+<ul>
+  <li>time bucket</li>
+  <li>metric name</li>
+  <li>label dimensions or preselected grouping keys</li>
+  <li>aggregate values</li>
+</ul>
+
+<p>Used for:</p>
+
+<ul>
+  <li>long-range dashboard queries</li>
+  <li>lower-cost historical analysis</li>
+  <li>faster aggregate reads</li>
+</ul>
+
+<p>I would also think about retention tiers here.</p>
+
+<p>For example:</p>
+
+<ul>
+  <li>raw data kept for a short window</li>
+  <li>rollups kept much longer</li>
+</ul>
+
+<p>That usually gives a better cost/performance balance than keeping everything raw forever.</p>
+
+<hr />
+
+<h2 id="query-layer">Query Layer</h2>
+
+<p>Dashboards should hit a dedicated <strong>Query Service</strong> instead of reading storage directly.</p>
+
+<p>That service would:</p>
+
+<ul>
+  <li>validate and parse queries</li>
+  <li>enforce tenant isolation</li>
+  <li>choose raw versus rollup tables based on time range and granularity</li>
+  <li>optionally merge recent raw data with older rollup data</li>
+  <li>use caching for repeated dashboard requests</li>
+</ul>
+
+<p>The important idea is that query routing should be intentional.</p>
+
+<p>If every dashboard query hits the raw table, the system gets expensive fast.</p>
+
+<p>So my mental model is:</p>
+
+<ul>
+  <li>recent and detailed queries -&gt; raw data</li>
+  <li>long-range and aggregate queries -&gt; rollups</li>
+</ul>
+
+<p>That is the main compute versus storage tradeoff in the design.</p>
+
+<hr />
+
+<h2 id="alerting-system">Alerting System</h2>
+
+<p>I would split alerts into two categories because not every alert needs the same latency.</p>
+
+<h3 id="standard-alerts">Standard Alerts</h3>
+
+<p>For less latency-sensitive alerts:</p>
+
+<ul>
+  <li>alert service periodically queries the time-series store</li>
+  <li>matching conditions generate alert events</li>
+  <li>notification service delivers email, SMS, or push notifications</li>
+</ul>
+
+<p>This polling model is simpler and often good enough for many use cases.</p>
+
+<h3 id="critical-alerts">Critical Alerts</h3>
+
+<p>For latency-sensitive alerts, I would move evaluation onto the streaming path.</p>
+
+<ul>
+  <li>a critical alert service consumes metrics directly from Kafka</li>
+  <li>alert rules are stored durably in SQL</li>
+  <li>rules are propagated to evaluators, for example through CDC</li>
+  <li>active rule state is kept in memory for fast evaluation</li>
+</ul>
+
+<p>The flow becomes:</p>
+
+<ol>
+  <li>metric arrives in Kafka</li>
+  <li>alert evaluator checks active rules immediately</li>
+  <li>if a threshold is breached, notification is triggered</li>
+</ol>
+
+<p>That avoids the lag introduced by polling.</p>
+
+<p>It is more complex, but much more aligned with operationally urgent alerting.</p>
+
+<hr />
+
+<h2 id="write-path">Write Path</h2>
+
+<p>A typical write flow in my head looks like this:</p>
+
+<ol>
+  <li>agent batches and sends metric samples</li>
+  <li>ingestion service validates format, tenant metadata, and basic limits</li>
+  <li>ingestion service publishes events to Kafka</li>
+  <li>raw consumers write detailed samples to storage</li>
+  <li>rollup consumers update aggregate tables</li>
+  <li>streaming alert consumers evaluate critical rules</li>
+</ol>
+
+<p>That keeps the hot write path append-heavy and avoids forcing every responsibility onto the database.</p>
+
+<hr />
+
+<h2 id="read-path">Read Path</h2>
+
+<p>A typical dashboard query would look like:</p>
+
+<ol>
+  <li>dashboard sends a query to the Query Service</li>
+  <li>service authenticates and validates the request</li>
+  <li>service decides whether the query should read raw data, rollup data, or both</li>
+  <li>results are returned with optional caching</li>
+</ol>
+
+<p>I like this separation because it gives the system a place to encode query policy instead of leaving every client to guess which table it should use.</p>
+
+<hr />
+
+<h2 id="deep-dives">Deep Dives</h2>
+
+<h3 id="scaling-to-millions-of-metrics-per-second">Scaling to Millions of Metrics per Second</h3>
+
+<p>The rough scaling story is:</p>
+
+<ul>
+  <li>horizontally scale ingestion services</li>
+  <li>use Kafka partitions for parallel consumption</li>
+  <li>scale raw and rollup consumers independently</li>
+  <li>batch aggressively at the agent and consumer layers</li>
+</ul>
+
+<p>That gives the system multiple places to absorb throughput instead of pushing all pressure onto storage.</p>
+
+<h3 id="low-latency-queries">Low-Latency Queries</h3>
+
+<p>Querying raw samples over long time ranges is expensive.</p>
+
+<p>The main fix is precomputation:</p>
+
+<ul>
+  <li>store raw data for detail</li>
+  <li>store rollups for efficiency</li>
+  <li>route queries intentionally</li>
+</ul>
+
+<p>Without that split, the dashboard experience usually degrades first.</p>
+
+<h3 id="real-time-alerts">Real-Time Alerts</h3>
+
+<p>Polling is simpler, but it adds latency that can matter during incidents.</p>
+
+<p>So for high-priority alerts, I would rather evaluate directly from the stream and keep only the state needed for sliding-window checks in memory or fast state storage.</p>
+
+<h3 id="out-of-order-events">Out-of-Order Events</h3>
+
+<p>Metrics often arrive late because of retries, batching, or temporary network failures.</p>
+
+<p>That means the system needs a clear rule for how long it will accept late data into a window or rollup.</p>
+
+<p>Typical choices are:</p>
+
+<ul>
+  <li>allow a bounded lateness window</li>
+  <li>update aggregates during that window</li>
+  <li>close the window after a threshold and treat later data separately</li>
+</ul>
+
+<p>Without this, rollups and alerts can become inconsistent.</p>
+
+<h3 id="cardinality-explosion">Cardinality Explosion</h3>
+
+<p>This is one of the biggest practical risks in a metrics platform.</p>
+
+<p>If users attach highly variable labels such as request IDs or user IDs, the number of distinct series can explode.</p>
+
+<p>That hurts:</p>
+
+<ul>
+  <li>storage footprint</li>
+  <li>memory usage</li>
+  <li>query latency</li>
+  <li>indexing efficiency</li>
+</ul>
+
+<p>So I would want safeguards such as:</p>
+
+<ul>
+  <li>label allowlists or validation</li>
+  <li>per-tenant cardinality limits</li>
+  <li>visibility into top cardinality offenders</li>
+</ul>
+
+<hr />
+
+<h2 id="failure-recovery">Failure Recovery</h2>
+
+<p>For the critical alert path, recovery would look something like:</p>
+
+<ol>
+  <li>reload alert rules from durable storage</li>
+  <li>restore recent evaluation state if needed</li>
+  <li>resume Kafka consumption from committed offsets</li>
+</ol>
+
+<p>Kafka offsets matter a lot here because they define where each consumer group continues after a crash.</p>
+
+<p>That helps prevent data loss and limits duplicate processing.</p>
+
+<p>More broadly, I would want resilience at each layer:</p>
+
+<ul>
+  <li>agents buffer and retry temporarily</li>
+  <li>ingestion nodes are stateless and replaceable</li>
+  <li>Kafka replicates across brokers</li>
+  <li>consumers can replay from offsets</li>
+  <li>notifications are queued for reliable delivery</li>
+</ul>
+
+<hr />
+
+<h2 id="tradeoffs">Tradeoffs</h2>
+
+<h3 id="kafka-vs-simpler-queues">Kafka vs Simpler Queues</h3>
+
+<p>Kafka is more operationally complex, but I think it is the better fit here because:</p>
+
+<ul>
+  <li>throughput is much higher</li>
+  <li>replay is valuable</li>
+  <li>multiple consumer groups are a first-class pattern</li>
+</ul>
+
+<p>A simpler queue is easier to operate, but not as natural for a multi-consumer streaming pipeline.</p>
+
+<h3 id="raw-vs-rollup-storage">Raw vs Rollup Storage</h3>
+
+<p>Raw data gives fidelity and flexibility.</p>
+
+<p>Rollups give much faster and cheaper long-range queries.</p>
+
+<p>You usually need both.</p>
+
+<h3 id="streaming-vs-polling-alerts">Streaming vs Polling Alerts</h3>
+
+<p>Polling is easier to build.</p>
+
+<p>Streaming is better for low-latency alerting.</p>
+
+<p>I would not use streaming for everything, but I also would not rely on polling for urgent incident signals.</p>
+
+<h3 id="more-labels-vs-more-cost">More Labels vs More Cost</h3>
+
+<p>Rich labels make the system more useful, but they also increase cardinality and cost.</p>
+
+<p>That tradeoff is easy to ignore early and painful later.</p>
+
+<hr />
+
+<h2 id="what-id-worry-about-most">What I’d Worry About Most</h2>
+
+<p>If I were talking through this in an interview, the areas I would watch most carefully are:</p>
+
+<ul>
+  <li>hot Kafka partitions</li>
+  <li>very high-cardinality label dimensions</li>
+  <li>dashboard queries that accidentally hit raw data for huge ranges</li>
+  <li>alert storms during incidents</li>
+  <li>late or duplicate metric samples</li>
+</ul>
+
+<p>Those are the kinds of problems that usually decide whether the system stays healthy under real production load.</p>
+
+<hr />
+
+<h2 id="final-thoughts">Final Thoughts</h2>
+
+<p>The shape of the design that makes the most sense to me is:</p>
+
+<ul>
+  <li>Kafka as the write buffer and streaming backbone</li>
+  <li>separate raw and rollup pipelines</li>
+  <li>a query service that chooses the right storage path</li>
+  <li>polling for standard alerts and streaming for critical ones</li>
+</ul>
+
+<p>That gives the system a good balance of throughput, query performance, and alert latency without asking one component to do everything.</p>
+
+<p>If I wanted to push this design further, I would probably go deeper into:</p>
+
+<ul>
+  <li>retention policies</li>
+  <li>compression</li>
+  <li>multi-region replication</li>
+  <li>percentile rollups</li>
+  <li>tenant isolation and noisy-neighbor controls</li>
+</ul>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+  <div class="wrapper">
+    <div class="container">
+      <div class="row">
+        <div class="column">
+          <h2 class="footer-heading">Daniel Kim - Senior Backend Engineer | Distributed Systems & Infrastructure</h2>
+          <p class="footer-description">Notes on software engineering, backend development, and problem solving.
+</p>
+        </div>
+
+        <div class="column">
+          <ul class="social-media-list">
+            
+            <li>
+              <a href="https://github.com/dkim1116"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">dkim1116</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="https://www.linkedin.com/in/dkim1116/"><span class="icon icon--linkedin"><svg viewBox="0 0 16 16"><path fill="#828282" d="M3.02 2.455A1.12 1.12 0 1 1 .78 2.454a1.12 1.12 0 0 1 2.24 0zM.95 4.217h2.14V15.05H.95V4.217zM6.48 4.217h2.05v1.48h.03c.29-.54.98-1.67 2.4-1.67 2.56 0 3.03 1.69 3.03 3.88v7.14h-2.14V8.72c0-1.51-.03-3.45-2.1-3.45-2.1 0-2.42 1.64-2.42 3.34v6.44H6.48V4.217z"/></svg>
+</span><span class="username">LinkedIn</span></a>
+
+            </li>
+            
+
+            
+            <li>
+              <a href="mailto:daniel.kim1116@gmail.com"><span class="icon icon--mail"><svg viewBox="0 0 512 512"><path d="M101.3 141.6v228.9h0.3 308.4 0.8V141.6H101.3zM375.7 167.8l-119.7 91.5 -119.6-91.5H375.7zM127.6 194.1l64.1 49.1 -64.1 64.1V194.1zM127.8 344.2l84.9-84.9 43.2 33.1 43-32.9 84.7 84.7L127.8 344.2 127.8 344.2zM384.4 307.8l-64.4-64.4 64.4-49.3V307.8z"/></svg></span><span class="username">daniel.kim1116@gmail.com</span></a>
+
+            </li>
+            
+          </ul>
+        </div>
+
+
+      </div>
+    </div>  
+  </div>
+</footer>
+
+
+  </body>
+
+</html>
